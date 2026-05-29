@@ -59,7 +59,7 @@ func (as *AutoStartService) Disable() error {
 // Windows 实现
 func (as *AutoStartService) isEnabledWindows() (bool, error) {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "query", key, "/v", "CodeSwitch")
+	cmd := exec.Command("reg", "query", key, "/v", appName)
 	err := cmd.Run()
 	return err == nil, nil
 }
@@ -71,7 +71,7 @@ func (as *AutoStartService) enableWindows() error {
 	}
 
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "add", key, "/v", "CodeSwitch", "/t", "REG_SZ", "/d", exePath, "/f")
+	cmd := exec.Command("reg", "add", key, "/v", appName, "/t", "REG_SZ", "/d", exePath, "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add registry key: %w", err)
 	}
@@ -80,7 +80,7 @@ func (as *AutoStartService) enableWindows() error {
 
 func (as *AutoStartService) disableWindows() error {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "delete", key, "/v", "CodeSwitch", "/f")
+	cmd := exec.Command("reg", "delete", key, "/v", appName, "/f")
 	// 忽略不存在的错误
 	_ = cmd.Run()
 	return nil
@@ -113,7 +113,7 @@ func (as *AutoStartService) enableDarwin() error {
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.codeswitch.app</string>
+	<string>%s</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>%s</string>
@@ -123,7 +123,7 @@ func (as *AutoStartService) enableDarwin() error {
 	<key>KeepAlive</key>
 	<false/>
 </dict>
-</plist>`, exePath)
+</plist>`, appBundleIdentifier, exePath)
 
 	if err := os.WriteFile(plistPath, []byte(plistContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write plist file: %w", err)
@@ -141,7 +141,7 @@ func (as *AutoStartService) disableDarwin() error {
 
 func (as *AutoStartService) getDarwinPlistPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", "com.codeswitch.app.plist")
+	return filepath.Join(home, "Library", "LaunchAgents", appBundleIdentifier+".plist")
 }
 
 // Linux 实现 (使用 .desktop 文件)
@@ -168,11 +168,11 @@ func (as *AutoStartService) enableLinux() error {
 
 	desktopContent := fmt.Sprintf(`[Desktop Entry]
 Type=Application
-Name=CodeSwitch
+Name=%s
 Exec=%s
 Hidden=false
 NoDisplay=false
-X-GNOME-Autostart-enabled=true`, exePath)
+	X-GNOME-Autostart-enabled=true`, appDisplayName, exePath)
 
 	if err := os.WriteFile(desktopPath, []byte(desktopContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write desktop file: %w", err)
@@ -195,5 +195,5 @@ func (as *AutoStartService) getLinuxDesktopPath() string {
 	if configHome == "" {
 		configHome = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configHome, "autostart", "codeswitch.desktop")
+	return filepath.Join(configHome, "autostart", appLinuxDesktopFileName)
 }

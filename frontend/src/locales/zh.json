@@ -266,7 +266,7 @@
       },
       "section": {
         "title": "已注册服务器",
-        "subtitle": "数据来自 ~/.code-switch/mcp.json，修改后立即保存"
+        "subtitle": "数据来自 ~/.code-switch-x/mcp.json，修改后立即保存"
       },
       "list": {
         "loading": "正在载入服务器...",

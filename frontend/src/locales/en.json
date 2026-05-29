@@ -265,7 +265,7 @@
       },
       "section": {
         "title": "Registered servers",
-        "subtitle": "Synced from ~/.code-switch/mcp.json and saved immediately"
+        "subtitle": "Synced from ~/.code-switch-x/mcp.json and saved immediately"
       },
       "list": {
         "loading": "Loading servers...",

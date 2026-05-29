@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	skillStoreDir  = ".code-switch"
+	skillStoreDir  = appDataDirName
 	skillStoreFile = "skill.json"
 )
 

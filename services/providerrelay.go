@@ -40,7 +40,7 @@ func NewProviderRelayService(providerService *ProviderService, addr string) *Pro
 		{
 			Name:        "default",
 			Driver:      "sqlite",
-			DSN:         filepath.Join(home, ".code-switch", "app.db"+sqliteOptions),
+			DSN:         filepath.Join(home, appDataDirName, "app.db"+sqliteOptions),
 			MaxOpenConn: 1,
 			MaxIdleConn: 1,
 		},

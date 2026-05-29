@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	appSettingsDir  = ".codex-switch"
 	appSettingsFile = "app.json"
 )
 
@@ -29,7 +28,7 @@ func NewAppSettingsService(autoStartService *AutoStartService) *AppSettingsServi
 	if err != nil {
 		home = "."
 	}
-	path := filepath.Join(home, appSettingsDir, appSettingsFile)
+	path := filepath.Join(home, appSettingsDirName, appSettingsFile)
 	return &AppSettingsService{
 		path:             path,
 		autoStartService: autoStartService,

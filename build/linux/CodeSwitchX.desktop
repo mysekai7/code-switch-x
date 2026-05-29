@@ -1,11 +1,11 @@
 [Desktop Entry]
 Version=1.0
-Name=Code Switch
+Name=Code Switch X
 Comment=Manage Claude & Codex relays, providers, and request logs.
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/CodeSwitch %u
+Exec=/usr/local/bin/CodeSwitchX %u
 Terminal=false
 Type=Application
-Icon=CodeSwitch
+Icon=CodeSwitchX
 Categories=Utility;
-StartupWMClass=CodeSwitch
+StartupWMClass=CodeSwitchX

@@ -56,7 +56,7 @@ func providerFilePath(kind string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".code-switch")
+	dir := filepath.Join(home, appDataDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -150,7 +150,7 @@ func (ps *ProviderService) LoadProviders(kind string) ([]Provider, error) {
 
 // IsModelSupported 检查 provider 是否支持指定的模型
 // 支持条件：1) 模型在 SupportedModels 中（精确或通配符匹配）
-//          2) 模型在 ModelMapping 的 key 中（精确或通配符匹配）
+//  2. 模型在 ModelMapping 的 key 中（精确或通配符匹配）
 func (p *Provider) IsModelSupported(modelName string) bool {
 	// 向后兼容：如果未配置白名单和映射，假设支持所有模型
 	if (p.SupportedModels == nil || len(p.SupportedModels) == 0) &&
@@ -297,7 +297,8 @@ func matchWildcard(pattern, text string) bool {
 // applyWildcardMapping 应用通配符映射
 // 将 pattern 中的 * 匹配部分替换到 replacement 的 * 位置
 // 示例: pattern="claude-*", replacement="anthropic/claude-*", input="claude-sonnet-4"
-//      输出: "anthropic/claude-sonnet-4"
+//
+//	输出: "anthropic/claude-sonnet-4"
 func applyWildcardMapping(pattern, replacement, input string) string {
 	// 如果 pattern 或 replacement 没有通配符，直接返回 replacement
 	if !strings.Contains(pattern, "*") || !strings.Contains(replacement, "*") {

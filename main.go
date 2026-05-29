@@ -93,7 +93,7 @@ func main() {
 	// 'Bind' is a list of Go struct instances. The frontend has access to the methods of these instances.
 	// 'Mac' options tailor the application when running an macOS.
 	app := application.New(application.Options{
-		Name:        "Code Switch",
+		Name:        services.AppDisplayName,
 		Description: "Claude Code and Codex provier manager",
 		Services: []application.Service{
 			application.NewService(appservice),
@@ -127,7 +127,7 @@ func main() {
 	// 'BackgroundColour' is the background colour of the window.
 	// 'URL' is the URL that will be loaded into the webview.
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Code Switch",
+		Title:     services.AppDisplayName,
 		Width:     1024,
 		Height:    800,
 		MinWidth:  600,
@@ -188,8 +188,7 @@ func main() {
 	})
 
 	systray := app.SystemTray.New()
-	// systray.SetLabel("Code Switch")
-	systray.SetTooltip("Code Switch")
+	systray.SetTooltip(services.AppDisplayName)
 	if lightIcon := loadTrayIcon("assets/icon.png"); len(lightIcon) > 0 {
 		systray.SetIcon(lightIcon)
 	}

@@ -133,3 +133,17 @@ func TestBuildMetadataUsesXApplicationIdentity(t *testing.T) {
 		t.Fatalf("legacy Linux desktop file still exists or stat failed unexpectedly: %v", err)
 	}
 }
+
+func TestMainRuntimeUsesXApplicationIdentity(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "main.go"))
+	if err != nil {
+		t.Fatalf("ReadFile(main.go) error = %v", err)
+	}
+	source := string(content)
+	if strings.Contains(source, `"Code Switch"`) {
+		t.Fatalf("main.go still contains legacy runtime display name literal")
+	}
+	if !strings.Contains(source, "services.AppDisplayName") {
+		t.Fatalf("main.go should use shared application identity constants")
+	}
+}

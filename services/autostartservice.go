@@ -59,7 +59,7 @@ func (as *AutoStartService) Disable() error {
 // Windows 实现
 func (as *AutoStartService) isEnabledWindows() (bool, error) {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "query", key, "/v", appName)
+	cmd := exec.Command("reg", "query", key, "/v", AppName)
 	err := cmd.Run()
 	return err == nil, nil
 }
@@ -71,7 +71,7 @@ func (as *AutoStartService) enableWindows() error {
 	}
 
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "add", key, "/v", appName, "/t", "REG_SZ", "/d", exePath, "/f")
+	cmd := exec.Command("reg", "add", key, "/v", AppName, "/t", "REG_SZ", "/d", exePath, "/f")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to add registry key: %w", err)
 	}
@@ -80,7 +80,7 @@ func (as *AutoStartService) enableWindows() error {
 
 func (as *AutoStartService) disableWindows() error {
 	key := `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "delete", key, "/v", appName, "/f")
+	cmd := exec.Command("reg", "delete", key, "/v", AppName, "/f")
 	// 忽略不存在的错误
 	_ = cmd.Run()
 	return nil
@@ -123,7 +123,7 @@ func (as *AutoStartService) enableDarwin() error {
 	<key>KeepAlive</key>
 	<false/>
 </dict>
-</plist>`, appBundleIdentifier, exePath)
+</plist>`, AppBundleIdentifier, exePath)
 
 	if err := os.WriteFile(plistPath, []byte(plistContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write plist file: %w", err)
@@ -141,7 +141,7 @@ func (as *AutoStartService) disableDarwin() error {
 
 func (as *AutoStartService) getDarwinPlistPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", appBundleIdentifier+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", AppBundleIdentifier+".plist")
 }
 
 // Linux 实现 (使用 .desktop 文件)
@@ -172,7 +172,7 @@ Name=%s
 Exec=%s
 Hidden=false
 NoDisplay=false
-	X-GNOME-Autostart-enabled=true`, appDisplayName, exePath)
+X-GNOME-Autostart-enabled=true`, AppDisplayName, exePath)
 
 	if err := os.WriteFile(desktopPath, []byte(desktopContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write desktop file: %w", err)

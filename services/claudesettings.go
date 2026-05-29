@@ -60,26 +60,45 @@ func (css *ClaudeSettingsService) EnableProxy() error {
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return err
 	}
+	settings := make(map[string]any)
 	if _, err := os.Stat(settingsPath); err == nil {
 		content, readErr := os.ReadFile(settingsPath)
 		if readErr != nil {
 			return readErr
 		}
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
+		if _, backupErr := os.Stat(backupPath); errors.Is(backupErr, os.ErrNotExist) {
+			if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+				return err
+			}
+		} else if backupErr != nil {
+			return backupErr
+		}
+		if len(content) > 0 {
+			if err := json.Unmarshal(content, &settings); err != nil {
+				return err
+			}
 		}
 	}
-	settings := claudeSettingsFile{
-		Env: map[string]string{
-			"ANTHROPIC_AUTH_TOKEN": claudeAuthTokenValue,
-			"ANTHROPIC_BASE_URL":   css.baseURL(),
-		},
-	}
+	env := ensureJSONTable(settings, "env")
+	env["ANTHROPIC_AUTH_TOKEN"] = claudeAuthTokenValue
+	env["ANTHROPIC_BASE_URL"] = css.baseURL()
+
 	payload, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(settingsPath, payload, 0o600)
+}
+
+func ensureJSONTable(payload map[string]any, key string) map[string]any {
+	if value, ok := payload[key]; ok {
+		if table, ok := value.(map[string]any); ok {
+			return table
+		}
+	}
+	table := make(map[string]any)
+	payload[key] = table
+	return table
 }
 
 func (css *ClaudeSettingsService) DisableProxy() error {

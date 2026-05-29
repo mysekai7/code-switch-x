@@ -17,6 +17,7 @@ const (
 	codexAuthFileName     = "auth.json"
 	codexBackupAuthName   = "cc-studio.back.auth.json"
 	codexPreferredAuth    = "apikey"
+	codexAuthModeKey      = "auth_mode"
 	codexDefaultModel     = "gpt-5-codex"
 	codexProviderKey      = "code-switch"
 	codexEnvKey           = "OPENAI_API_KEY"
@@ -66,8 +67,12 @@ func (css *CodexSettingsService) EnableProxy() error {
 		if readErr != nil {
 			return readErr
 		}
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
+		if _, backupErr := os.Stat(backupPath); errors.Is(backupErr, os.ErrNotExist) {
+			if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+				return err
+			}
+		} else if backupErr != nil {
+			return backupErr
 		}
 		if err := toml.Unmarshal(content, &raw); err != nil {
 			return err
@@ -78,7 +83,7 @@ func (css *CodexSettingsService) EnableProxy() error {
 	if raw == nil {
 		raw = make(map[string]any)
 	}
-	raw["preferred_auth_method"] = codexPreferredAuth
+	delete(raw, "preferred_auth_method")
 	raw["model"] = codexDefaultModel
 	raw["model_provider"] = codexProviderKey
 
@@ -173,10 +178,9 @@ func (css *CodexSettingsService) baseURL() string {
 }
 
 type codexConfig struct {
-	PreferredAuthMethod string                   `toml:"preferred_auth_method"`
-	Model               string                   `toml:"model"`
-	ModelProvider       string                   `toml:"model_provider"`
-	ModelProviders      map[string]codexProvider `toml:"model_providers"`
+	Model          string                   `toml:"model"`
+	ModelProvider  string                   `toml:"model_provider"`
+	ModelProviders map[string]codexProvider `toml:"model_providers"`
 }
 
 type codexProvider struct {
@@ -238,18 +242,27 @@ func (css *CodexSettingsService) writeAuthFile() error {
 	if err := os.MkdirAll(filepath.Dir(authPath), 0o755); err != nil {
 		return err
 	}
+	payload := make(map[string]any)
 	if _, err := os.Stat(authPath); err == nil {
 		content, readErr := os.ReadFile(authPath)
 		if readErr != nil {
 			return readErr
 		}
-		if err := os.WriteFile(backupPath, content, 0o600); err != nil {
-			return err
+		if _, backupErr := os.Stat(backupPath); errors.Is(backupErr, os.ErrNotExist) {
+			if err := os.WriteFile(backupPath, content, 0o600); err != nil {
+				return err
+			}
+		} else if backupErr != nil {
+			return backupErr
+		}
+		if len(content) > 0 {
+			if err := json.Unmarshal(content, &payload); err != nil {
+				return err
+			}
 		}
 	}
-	payload := map[string]string{
-		codexEnvKey: codexTokenValue,
-	}
+	payload[codexAuthModeKey] = codexPreferredAuth
+	payload[codexEnvKey] = codexTokenValue
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err

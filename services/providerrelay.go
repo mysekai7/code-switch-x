@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,6 +143,7 @@ func (prs *ProviderRelayService) Addr() string {
 func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/v1/responses", prs.proxyHandler("codex", "/responses"))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {
@@ -217,6 +219,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		clientHeaders := cloneHeaders(c.Request.Header)
 
 		var lastErr error
+		var lastUpstreamErr *upstreamResponseError
 		attemptCount := 0
 		for i, provider := range active {
 			attemptCount++
@@ -255,6 +258,15 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			fmt.Printf("[WARN]   ✗ 失败: %s | 错误: %s | 耗时: %.2fs\n",
 				provider.Name, errorMsg, duration.Seconds())
 			lastErr = err
+			var upstreamErr *upstreamResponseError
+			if errors.As(err, &upstreamErr) {
+				lastUpstreamErr = upstreamErr
+			}
+		}
+
+		if lastUpstreamErr != nil {
+			writeUpstreamError(c, lastUpstreamErr)
+			return
 		}
 
 		message := fmt.Sprintf("所有 %d 个 provider 均失败（共尝试 %d 次）", len(active), attemptCount)
@@ -326,10 +338,6 @@ func (prs *ProviderRelayService) forwardRequest(
 		return false, fmt.Errorf("empty response")
 	}
 
-	if resp.Error() != nil {
-		return false, resp.Error()
-	}
-
 	status := resp.StatusCode()
 	requestLog.HttpCode = status
 
@@ -338,7 +346,8 @@ func (prs *ProviderRelayService) forwardRequest(
 		return copyErr == nil, copyErr
 	}
 
-	return false, fmt.Errorf("upstream status %d", status)
+	body := resp.Bytes()
+	return false, newUpstreamResponseError(status, resp.Headers(), body)
 }
 
 func cloneHeaders(header http.Header) map[string]string {
@@ -380,6 +389,49 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+type upstreamResponseError struct {
+	statusCode int
+	headers    http.Header
+	body       []byte
+}
+
+func newUpstreamResponseError(statusCode int, headers http.Header, body []byte) *upstreamResponseError {
+	return &upstreamResponseError{
+		statusCode: statusCode,
+		headers:    cloneHTTPHeader(headers),
+		body:       append([]byte(nil), body...),
+	}
+}
+
+func (e *upstreamResponseError) Error() string {
+	if len(e.body) > 0 {
+		return string(e.body)
+	}
+	return fmt.Sprintf("upstream status %d", e.statusCode)
+}
+
+func writeUpstreamError(c *gin.Context, upstreamErr *upstreamResponseError) {
+	for key, values := range upstreamErr.headers {
+		target := c.Writer.Header()
+		target.Del(key)
+		for _, value := range values {
+			target.Add(key, value)
+		}
+	}
+	c.Writer.WriteHeader(upstreamErr.statusCode)
+	if len(upstreamErr.body) > 0 {
+		_, _ = c.Writer.Write(upstreamErr.body)
+	}
+}
+
+func cloneHTTPHeader(header http.Header) http.Header {
+	cloned := make(http.Header, len(header))
+	for key, values := range header {
+		cloned[key] = append([]string(nil), values...)
+	}
+	return cloned
 }
 
 func ensureRequestLogColumn(db *sql.DB, column string, definition string) error {
@@ -496,22 +548,34 @@ type ReqeustLog struct {
 
 // claude code usage parser
 func ClaudeCodeParseTokenUsageFromResponse(data string, usage *ReqeustLog) {
-	usage.InputTokens += int(gjson.Get(data, "message.usage.input_tokens").Int())
-	usage.OutputTokens += int(gjson.Get(data, "message.usage.output_tokens").Int())
-	usage.CacheCreateTokens += int(gjson.Get(data, "message.usage.cache_creation_input_tokens").Int())
-	usage.CacheReadTokens += int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int())
+	maxInt(&usage.InputTokens, int(gjson.Get(data, "message.usage.input_tokens").Int()))
+	maxInt(&usage.OutputTokens, int(gjson.Get(data, "message.usage.output_tokens").Int()))
+	maxInt(&usage.CacheCreateTokens, int(gjson.Get(data, "message.usage.cache_creation_input_tokens").Int()))
+	maxInt(&usage.CacheReadTokens, int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int()))
 
-	usage.InputTokens += int(gjson.Get(data, "usage.input_tokens").Int())
-	usage.OutputTokens += int(gjson.Get(data, "usage.output_tokens").Int())
+	maxInt(&usage.InputTokens, int(gjson.Get(data, "usage.input_tokens").Int()))
+	maxInt(&usage.OutputTokens, int(gjson.Get(data, "usage.output_tokens").Int()))
 }
 
 // codex usage parser
 func CodexParseTokenUsageFromResponse(data string, usage *ReqeustLog) {
-	usage.InputTokens += int(gjson.Get(data, "response.usage.input_tokens").Int())
-	usage.OutputTokens += int(gjson.Get(data, "response.usage.output_tokens").Int())
-	usage.CacheReadTokens += int(gjson.Get(data, "response.usage.input_tokens_details.cached_tokens").Int())
-	usage.ReasoningTokens += int(gjson.Get(data, "response.usage.output_tokens_details.reasoning_tokens").Int())
-	fmt.Println("data ---->", data, fmt.Sprintf("%v", usage))
+	usageData := gjson.Get(data, "response.usage")
+	if !usageData.Exists() {
+		usageData = gjson.Get(data, "usage")
+	}
+	if !usageData.Exists() {
+		return
+	}
+	usage.InputTokens += int(usageData.Get("input_tokens").Int())
+	usage.OutputTokens += int(usageData.Get("output_tokens").Int())
+	usage.CacheReadTokens += int(usageData.Get("input_tokens_details.cached_tokens").Int())
+	usage.ReasoningTokens += int(usageData.Get("output_tokens_details.reasoning_tokens").Int())
+}
+
+func maxInt(target *int, value int) {
+	if value > *target {
+		*target = value
+	}
 }
 
 // ReplaceModelInRequestBody 替换请求体中的模型名

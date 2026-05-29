@@ -2,8 +2,13 @@ package services
 
 import (
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -129,19 +134,19 @@ func TestModelMappingEndToEnd(t *testing.T) {
 	provider := Provider{
 		Name: "OpenRouter",
 		SupportedModels: map[string]bool{
-			"anthropic/claude-sonnet-4":     true,
-			"anthropic/claude-opus-4":       true,
-			"openai/gpt-4":                  true,
-			"google/gemini-pro":             true,
-			"meta-llama/llama-3.1-405b":     true,
-			"anthropic/claude-3.5-sonnet":   true,
-			"anthropic/claude-3.5-haiku":    true,
+			"anthropic/claude-sonnet-4":   true,
+			"anthropic/claude-opus-4":     true,
+			"openai/gpt-4":                true,
+			"google/gemini-pro":           true,
+			"meta-llama/llama-3.1-405b":   true,
+			"anthropic/claude-3.5-sonnet": true,
+			"anthropic/claude-3.5-haiku":  true,
 		},
 		ModelMapping: map[string]string{
-			"claude-*":                     "anthropic/claude-*",
-			"gpt-*":                        "openai/gpt-*",
-			"gemini-*":                     "google/gemini-*",
-			"llama-*":                      "meta-llama/llama-*",
+			"claude-*": "anthropic/claude-*",
+			"gpt-*":    "openai/gpt-*",
+			"gemini-*": "google/gemini-*",
+			"llama-*":  "meta-llama/llama-*",
 		},
 	}
 
@@ -251,6 +256,191 @@ func TestProviderConfigValidation(t *testing.T) {
 	if len(errors) != 0 {
 		t.Errorf("通配符配置不应有错误，但返回了: %v", errors)
 	}
+}
+
+// ==================== 代理兼容性测试 ====================
+
+func TestProxyHandlerReturnsLastUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "req_rate_limited")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{{
+		ID:      1,
+		Name:    "OpenAI",
+		APIURL:  upstream.URL,
+		APIKey:  "test-key",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Request-Id"); got != "req_rate_limited" {
+		t.Fatalf("X-Request-Id = %q, want %q", got, "req_rate_limited")
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "rate_limit_error" {
+		t.Fatalf("error.type = %q, want %q, body=%s", got, "rate_limit_error", rec.Body.String())
+	}
+}
+
+func TestProxyHandlerKeepsLastUpstreamErrorWhenLaterProviderHasNoResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "req_upstream_error")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad key","type":"invalid_api_key"}}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{
+		{
+			ID:      1,
+			Name:    "OpenAI",
+			APIURL:  upstream.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+		{
+			ID:      2,
+			Name:    "BrokenProvider",
+			APIURL:  "://invalid-url",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Request-Id"); got != "req_upstream_error" {
+		t.Fatalf("X-Request-Id = %q, want %q", got, "req_upstream_error")
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "invalid_api_key" {
+		t.Fatalf("error.type = %q, want %q, body=%s", got, "invalid_api_key", rec.Body.String())
+	}
+}
+
+func TestRegisterRoutesSupportsOpenAIResponsesPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response"}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{{
+		ID:      1,
+		Name:    "OpenAI",
+		APIURL:  upstream.URL,
+		APIKey:  "test-key",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","input":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "id").String(); got != "resp_test" {
+		t.Fatalf("id = %q, want %q, body=%s", got, "resp_test", rec.Body.String())
+	}
+}
+
+func TestCodexParseTokenUsageFromRootUsage(t *testing.T) {
+	usage := &ReqeustLog{}
+	CodexParseTokenUsageFromResponse(`{
+		"usage": {
+			"input_tokens": 12,
+			"output_tokens": 3,
+			"input_tokens_details": {"cached_tokens": 4},
+			"output_tokens_details": {"reasoning_tokens": 2}
+		}
+	}`, usage)
+
+	if usage.InputTokens != 12 {
+		t.Fatalf("InputTokens = %d, want 12", usage.InputTokens)
+	}
+	if usage.OutputTokens != 3 {
+		t.Fatalf("OutputTokens = %d, want 3", usage.OutputTokens)
+	}
+	if usage.CacheReadTokens != 4 {
+		t.Fatalf("CacheReadTokens = %d, want 4", usage.CacheReadTokens)
+	}
+	if usage.ReasoningTokens != 2 {
+		t.Fatalf("ReasoningTokens = %d, want 2", usage.ReasoningTokens)
+	}
+}
+
+func TestClaudeParseTokenUsageAvoidsCumulativeDoubleCount(t *testing.T) {
+	usage := &ReqeustLog{}
+	ClaudeCodeParseTokenUsageFromResponse(`{"usage":{"output_tokens":2}}`, usage)
+	ClaudeCodeParseTokenUsageFromResponse(`{"usage":{"output_tokens":5}}`, usage)
+
+	if usage.OutputTokens != 5 {
+		t.Fatalf("OutputTokens = %d, want 5", usage.OutputTokens)
+	}
+}
+
+func setupRelayTestRouter(t *testing.T, kind string, providers []Provider) *gin.Engine {
+	t.Helper()
+
+	t.Setenv("HOME", t.TempDir())
+
+	providerService := NewProviderService()
+	if err := providerService.SaveProviders(kind, providers); err != nil {
+		t.Fatalf("save providers: %v", err)
+	}
+
+	relay := NewProviderRelayService(providerService, ":0")
+	router := gin.New()
+	relay.registerRoutes(router)
+	return router
+}
+
+func newTCP4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4 test server: %v", err)
+	}
+
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
 }
 
 // ==================== 性能测试 ====================

@@ -35,12 +35,16 @@ func NewProviderRelayService(providerService *ProviderService, addr string) *Pro
 
 	home, _ := os.UserHomeDir()
 	const sqliteOptions = "?cache=shared&mode=rwc&_busy_timeout=5000&_journal_mode=WAL"
+	dbDir := filepath.Join(home, appDataDirName)
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		fmt.Printf("初始化数据库目录失败: %v\n", err)
+	}
 
 	if err := xdb.Inits([]xdb.Config{
 		{
 			Name:        "default",
 			Driver:      "sqlite",
-			DSN:         filepath.Join(home, appDataDirName, "app.db"+sqliteOptions),
+			DSN:         filepath.Join(dbDir, "app.db"+sqliteOptions),
 			MaxOpenConn: 1,
 			MaxIdleConn: 1,
 		},

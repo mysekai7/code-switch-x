@@ -10,7 +10,7 @@ info:
   description: "Manage Claude & Codex relays, providers, and request logs." # The application description
   copyright: "(c) 2025, Code Switch X" # Copyright text
   comments: "Code Switch X desktop relay controller" # Comments
-  version: "0.1.8" # The application version
+  version: "0.2.0" # The application version
 # Dev mode configuration
 dev_mode:
   root_path: .

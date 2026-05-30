@@ -24,6 +24,7 @@ import (
 type ProviderRelayService struct {
 	providerService    *ProviderService
 	appSettingsService *AppSettingsService
+	codexChatHistory   *codexChatHistoryStore
 	server             *http.Server
 	addr               string
 }
@@ -63,6 +64,7 @@ func NewProviderRelayService(providerService *ProviderService, addr string, appS
 	return &ProviderRelayService{
 		providerService:    providerService,
 		appSettingsService: appSettingsService,
+		codexChatHistory:   newCodexChatHistoryStore(),
 		addr:               addr,
 	}
 }
@@ -155,6 +157,8 @@ func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
 	router.POST("/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {

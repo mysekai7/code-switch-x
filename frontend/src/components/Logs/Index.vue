@@ -63,6 +63,7 @@
             <th class="col-stream">{{ t('components.logs.table.stream') }}</th>
             <th class="col-duration">{{ t('components.logs.table.duration') }}</th>
             <th class="col-tokens">{{ t('components.logs.table.tokens') }}</th>
+            <th class="col-details">{{ t('components.logs.table.details') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -96,9 +97,14 @@
                 <span class="token-value">{{ formatNumber(item.cache_read_tokens) }}</span>
               </div>
             </td>
+            <td>
+              <BaseButton variant="outline" size="sm" type="button" @click="openLogDetails(item)">
+                {{ t('components.logs.details.open') }}
+              </BaseButton>
+            </td>
           </tr>
           <tr v-if="!pagedLogs.length && !loading">
-            <td colspan="8" class="empty">{{ t('components.logs.empty') }}</td>
+            <td colspan="9" class="empty">{{ t('components.logs.empty') }}</td>
           </tr>
         </tbody>
       </table>
@@ -116,6 +122,55 @@
         </BaseButton>
       </div>
     </div>
+
+    <div v-if="selectedLog" class="raw-log-backdrop" @click.self="closeLogDetails">
+      <aside class="raw-log-drawer" role="dialog" aria-modal="true">
+        <header class="raw-log-header">
+          <div>
+            <p class="raw-log-eyebrow">{{ t('components.logs.details.eyebrow') }}</p>
+            <h2>{{ t('components.logs.details.title') }}</h2>
+            <p class="raw-log-meta">
+              {{ selectedLog.provider || '—' }} · {{ selectedLog.model || '—' }} ·
+              {{ formatTime(selectedLog.created_at) }}
+            </p>
+          </div>
+          <BaseButton variant="outline" size="sm" type="button" @click="closeLogDetails">
+            {{ t('components.logs.details.close') }}
+          </BaseButton>
+        </header>
+
+        <p v-if="payloadLoading" class="raw-log-empty">{{ t('components.logs.details.loading') }}</p>
+        <p v-else-if="payloadError" class="raw-log-empty">{{ payloadError }}</p>
+        <p v-else-if="!selectedPayload?.has_payload" class="raw-log-empty">
+          {{ t('components.logs.details.noPayload') }}
+        </p>
+        <template v-else>
+          <nav class="raw-log-tabs">
+            <button
+              v-for="tab in visiblePayloadTabs"
+              :key="tab"
+              type="button"
+              :class="{ active: payloadTab === tab }"
+              @click="payloadTab = tab"
+            >
+              {{ t(`components.logs.details.tabs.${tab}`) }}
+            </button>
+          </nav>
+
+          <div class="raw-log-content">
+            <article v-for="block in currentPayloadBlocks" :key="block.key" class="raw-log-block">
+              <div class="raw-log-block-title">
+                <span>{{ block.title }}</span>
+                <span v-if="block.truncated" class="raw-log-truncated">
+                  {{ t('components.logs.details.truncated') }}
+                </span>
+              </div>
+              <pre>{{ formatPayloadBlock(block.value) }}</pre>
+            </article>
+          </div>
+        </template>
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -128,7 +183,9 @@ import {
   fetchRequestLogs,
   fetchLogProviders,
   fetchLogStats,
+  fetchRequestLogPayload,
   type RequestLog,
+  type RequestLogPayload,
   type LogStats,
   type LogStatsSeries,
 } from '../../services/logs'
@@ -157,6 +214,12 @@ const page = ref(1)
 const PAGE_SIZE = 15
 const providerOptions = ref<string[]>([])
 const statsSeries = computed<LogStatsSeries[]>(() => stats.value?.series ?? [])
+type PayloadTab = 'request' | 'response' | 'upstream'
+const selectedLog = ref<RequestLog | null>(null)
+const selectedPayload = ref<RequestLogPayload | null>(null)
+const payloadLoading = ref(false)
+const payloadError = ref('')
+const payloadTab = ref<PayloadTab>('request')
 
 const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined'
 const readDarkMode = () => (isBrowser ? document.documentElement.classList.contains('dark') : false)
@@ -435,6 +498,29 @@ const backToHome = () => {
   router.push('/')
 }
 
+const openLogDetails = async (item: RequestLog) => {
+  selectedLog.value = item
+  selectedPayload.value = null
+  payloadError.value = ''
+  payloadTab.value = 'request'
+  payloadLoading.value = true
+  try {
+    selectedPayload.value = await fetchRequestLogPayload(item.id)
+  } catch (error) {
+    console.error('failed to load request log payload', error)
+    payloadError.value = t('components.logs.details.loadError')
+  } finally {
+    payloadLoading.value = false
+  }
+}
+
+const closeLogDetails = () => {
+  selectedLog.value = null
+  selectedPayload.value = null
+  payloadError.value = ''
+  payloadTab.value = 'request'
+}
+
 const padHour = (num: number) => num.toString().padStart(2, '0')
 
 const formatTime = (value?: string) => {
@@ -472,6 +558,79 @@ const formatNumber = (value?: number) => {
   if (value === undefined || value === null) return '—'
   return value.toLocaleString()
 }
+
+const formatPayloadBlock = (value?: string) => {
+  if (!value) return t('components.logs.details.emptyPayload')
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+const hasUpstreamPayload = computed(() => {
+  const payload = selectedPayload.value
+  return Boolean(payload?.upstream_request_body || payload?.upstream_response_body)
+})
+
+const visiblePayloadTabs = computed<PayloadTab[]>(() => {
+  const tabs: PayloadTab[] = ['request', 'response']
+  if (hasUpstreamPayload.value) {
+    tabs.push('upstream')
+  }
+  return tabs
+})
+
+const currentPayloadBlocks = computed(() => {
+  const payload = selectedPayload.value
+  if (!payload) return []
+  if (payloadTab.value === 'request') {
+    return [
+      {
+        key: 'request-headers',
+        title: t('components.logs.details.sections.headers'),
+        value: payload.request_headers,
+        truncated: false,
+      },
+      {
+        key: 'request-body',
+        title: t('components.logs.details.sections.body'),
+        value: payload.request_body,
+        truncated: payload.request_truncated,
+      },
+    ]
+  }
+  if (payloadTab.value === 'upstream') {
+    return [
+      {
+        key: 'upstream-request-body',
+        title: t('components.logs.details.sections.upstreamRequest'),
+        value: payload.upstream_request_body,
+        truncated: payload.request_truncated,
+      },
+      {
+        key: 'upstream-response-body',
+        title: t('components.logs.details.sections.upstreamResponse'),
+        value: payload.upstream_response_body,
+        truncated: payload.response_truncated,
+      },
+    ]
+  }
+  return [
+    {
+      key: 'response-headers',
+      title: t('components.logs.details.sections.headers'),
+      value: payload.response_headers,
+      truncated: false,
+    },
+    {
+      key: 'response-body',
+      title: t('components.logs.details.sections.body'),
+      value: payload.response_body,
+      truncated: payload.response_truncated,
+    },
+  ]
+})
 
 const formatCurrency = (value?: number) => {
   if (value === undefined || value === null || Number.isNaN(value)) {

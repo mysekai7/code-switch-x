@@ -1,6 +1,7 @@
 package services
 
 import (
+	"database/sql"
 	"errors"
 	"log"
 	"sort"
@@ -18,12 +19,75 @@ type LogService struct {
 	pricing *modelpricing.Service
 }
 
+type RequestLogPayload struct {
+	LogID                int64  `json:"log_id"`
+	HasPayload           bool   `json:"has_payload"`
+	RequestHeaders       string `json:"request_headers"`
+	RequestBody          string `json:"request_body"`
+	ResponseHeaders      string `json:"response_headers"`
+	ResponseBody         string `json:"response_body"`
+	UpstreamRequestBody  string `json:"upstream_request_body"`
+	UpstreamResponseBody string `json:"upstream_response_body"`
+	RequestTruncated     bool   `json:"request_truncated"`
+	ResponseTruncated    bool   `json:"response_truncated"`
+	CreatedAt            string `json:"created_at"`
+}
+
 func NewLogService() *LogService {
 	svc, err := modelpricing.DefaultService()
 	if err != nil {
 		log.Printf("pricing service init failed: %v", err)
 	}
 	return &LogService{pricing: svc}
+}
+
+func (ls *LogService) GetRequestLogPayload(logID int64) (RequestLogPayload, error) {
+	payload := RequestLogPayload{LogID: logID}
+	if logID <= 0 {
+		return payload, nil
+	}
+	db, err := xdb.DB("default")
+	if err != nil {
+		return payload, err
+	}
+
+	var requestTruncated int
+	var responseTruncated int
+	err = db.QueryRow(`
+		SELECT
+			request_headers,
+			request_body,
+			response_headers,
+			response_body,
+			upstream_request_body,
+			upstream_response_body,
+			request_truncated,
+			response_truncated,
+			created_at
+		FROM request_log_payload
+		WHERE log_id = ?
+	`, logID).Scan(
+		&payload.RequestHeaders,
+		&payload.RequestBody,
+		&payload.ResponseHeaders,
+		&payload.ResponseBody,
+		&payload.UpstreamRequestBody,
+		&payload.UpstreamResponseBody,
+		&requestTruncated,
+		&responseTruncated,
+		&payload.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || isNoSuchTableErr(err) {
+			return payload, nil
+		}
+		return payload, err
+	}
+
+	payload.HasPayload = true
+	payload.RequestTruncated = requestTruncated != 0
+	payload.ResponseTruncated = responseTruncated != 0
+	return payload, nil
 }
 
 func (ls *LogService) ListRequestLogs(platform string, provider string, limit int) ([]ReqeustLog, error) {
@@ -521,17 +585,17 @@ type LogStats struct {
 }
 
 type ProviderDailyStat struct {
-	Provider          string  `json:"provider"`
-	TotalRequests     int64   `json:"total_requests"`
+	Provider           string  `json:"provider"`
+	TotalRequests      int64   `json:"total_requests"`
 	SuccessfulRequests int64   `json:"successful_requests"`
-	FailedRequests    int64   `json:"failed_requests"`
-	SuccessRate       float64 `json:"success_rate"`
-	InputTokens       int64   `json:"input_tokens"`
-	OutputTokens      int64   `json:"output_tokens"`
-	ReasoningTokens   int64   `json:"reasoning_tokens"`
-	CacheCreateTokens int64   `json:"cache_create_tokens"`
-	CacheReadTokens   int64   `json:"cache_read_tokens"`
-	CostTotal         float64 `json:"cost_total"`
+	FailedRequests     int64   `json:"failed_requests"`
+	SuccessRate        float64 `json:"success_rate"`
+	InputTokens        int64   `json:"input_tokens"`
+	OutputTokens       int64   `json:"output_tokens"`
+	ReasoningTokens    int64   `json:"reasoning_tokens"`
+	CacheCreateTokens  int64   `json:"cache_create_tokens"`
+	CacheReadTokens    int64   `json:"cache_read_tokens"`
+	CostTotal          float64 `json:"cost_total"`
 }
 
 type LogStatsSeries struct {

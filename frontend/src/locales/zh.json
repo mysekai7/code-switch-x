@@ -200,7 +200,30 @@
         "httpCode": "HTTP",
         "stream": "传输",
         "duration": "耗时",
-        "tokens": "Token 汇总"
+        "tokens": "Token 汇总",
+        "details": "详情"
+      },
+      "details": {
+        "eyebrow": "原始载荷",
+        "title": "请求详情",
+        "open": "详情",
+        "close": "关闭",
+        "loading": "正在加载原始请求/响应...",
+        "loadError": "加载原始请求/响应失败",
+        "noPayload": "这条日志没有保存原始请求/响应。请在设置中开启后查看新请求。",
+        "emptyPayload": "无内容",
+        "truncated": "已截断",
+        "tabs": {
+          "request": "请求",
+          "response": "响应",
+          "upstream": "上游转换"
+        },
+        "sections": {
+          "headers": "Headers",
+          "body": "Body",
+          "upstreamRequest": "上游请求 Body",
+          "upstreamResponse": "上游响应 Body"
+        }
       },
       "tokenLabels": {
         "input": "输入",
@@ -232,6 +255,8 @@
         "heatmap": "显示主界面热力墙",
         "homeTitle": "显示首页标题",
         "autoStart": "开机自启动",
+        "relayPort": "本地代理端口",
+        "rawLogs": "保存原始请求/响应",
         "automatic_up": "自动检查更新",
         "next_up": "下次启动自动检查更新"
       },
@@ -243,6 +268,16 @@
         "authorized": "已授权",
         "go_authorized": "去授权",
         "back": "返回首页"
+      },
+      "relay": {
+        "subLabel": "当前代理地址：http://127.0.0.1:{port}，修改后重启应用生效",
+        "save": "保存端口",
+        "invalidPort": "端口需在 1024-65535 之间",
+        "saveFailed": "保存端口失败",
+        "restartRequired": "端口已保存，重启应用后生效"
+      },
+      "rawLogs": {
+        "subLabel": "默认关闭。开启后仅保存新请求，内容可能包含 Prompt、工具输出或文件片段。"
       },
       "import": {
         "label": "导入 cc-switch 配置",

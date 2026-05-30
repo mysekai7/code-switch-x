@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daodao97/xgo/xrequest"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -308,26 +307,38 @@ func (prs *ProviderRelayService) forwardDeepSeekCodexRequest(
 	if err != nil {
 		return false, err
 	}
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureUpstreamRequestBody(translatedBody)
+	}
 
-	req := xrequest.New().
-		SetHeaders(headers).
-		SetQueryParams(query).
-		SetBody(bytes.NewReader(translatedBody))
-
-	resp, err := req.Post(joinURL(provider.APIURL, deepSeekChatCompletionsEndpoint))
+	resp, err := postUpstream(joinURL(provider.APIURL, deepSeekChatCompletionsEndpoint), query, headers, translatedBody)
 	if err != nil {
 		return false, err
 	}
 	if resp == nil {
 		return false, fmt.Errorf("empty response")
 	}
-	status := resp.StatusCode()
+	status := resp.StatusCode
 	requestLog.HttpCode = status
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return false, newUpstreamResponseError(status, resp.Headers(), resp.Bytes())
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if requestLog.RawLog != nil {
+			requestLog.RawLog.captureResponseHeaders(resp.Header)
+			requestLog.RawLog.captureResponseBody(body)
+			requestLog.RawLog.captureUpstreamResponseBody(body)
+		}
+		return false, newUpstreamResponseError(status, resp.Header, body)
 	}
 
-	body := resp.Bytes()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureUpstreamResponseBody(body)
+	}
 	translatedResponse, err := translateDeepSeekChatCompletionToResponses(body, isStream)
 	if err != nil {
 		return false, err
@@ -339,6 +350,10 @@ func (prs *ProviderRelayService) forwardDeepSeekCodexRequest(
 	} else {
 		c.Header("Content-Type", "application/json")
 		CodexParseTokenUsageFromResponse(string(translatedResponse), requestLog)
+	}
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureResponseHeaders(c.Writer.Header())
+		requestLog.RawLog.captureResponseBody(translatedResponse)
 	}
 	_, err = io.Copy(c.Writer, bytes.NewReader(translatedResponse))
 	return err == nil, err

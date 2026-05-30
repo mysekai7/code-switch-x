@@ -199,7 +199,30 @@
         "httpCode": "HTTP",
         "stream": "Stream",
         "duration": "Duration",
-        "tokens": "Tokens"
+        "tokens": "Tokens",
+        "details": "Details"
+      },
+      "details": {
+        "eyebrow": "Raw payload",
+        "title": "Request details",
+        "open": "Details",
+        "close": "Close",
+        "loading": "Loading raw request/response...",
+        "loadError": "Failed to load raw request/response",
+        "noPayload": "No raw request/response was saved for this log. Enable it in settings and inspect new requests.",
+        "emptyPayload": "No content",
+        "truncated": "Truncated",
+        "tabs": {
+          "request": "Request",
+          "response": "Response",
+          "upstream": "Upstream"
+        },
+        "sections": {
+          "headers": "Headers",
+          "body": "Body",
+          "upstreamRequest": "Upstream request body",
+          "upstreamResponse": "Upstream response body"
+        }
       },
       "tokenLabels": {
         "input": "Input",
@@ -232,7 +255,9 @@
         "theme": "Theme mode",
         "heatmap": "Show dashboard heatmap",
         "homeTitle": "Show home title",
-        "autoStart": "Launch at login"
+        "autoStart": "Launch at login",
+        "relayPort": "Local relay port",
+        "rawLogs": "Save raw request/response"
       },
       "subLabel": {
         "sb_assistant_access": "Accessibility permission is required to operate clipboard contents",
@@ -242,6 +267,16 @@
         "authorized": "Auth",
         "go_authorized": "Auth now",
         "back": "Back to home"
+      },
+      "relay": {
+        "subLabel": "Current proxy URL: http://127.0.0.1:{port}. Restart the app after changing it.",
+        "save": "Save port",
+        "invalidPort": "Port must be between 1024 and 65535",
+        "saveFailed": "Failed to save port",
+        "restartRequired": "Port saved. Restart the app to apply it."
+      },
+      "rawLogs": {
+        "subLabel": "Off by default. When enabled, only new requests are saved and may include prompts, tool output, or file snippets."
       },
       "import": {
         "label": "Import cc-switch data",

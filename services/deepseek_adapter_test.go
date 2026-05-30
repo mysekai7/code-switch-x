@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/daodao97/xgo/xdb"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -416,5 +417,80 @@ func TestProviderRelaySynthesizesResponsesStreamForDeepSeekCodex(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "event: response.completed") {
 		t.Fatalf("stream response missing completed event: %s", rec.Body.String())
+	}
+}
+
+func TestProviderRelayStoresDeepSeekRawPayloads(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-123",
+			"model": "deepseek-chat",
+			"choices": [
+				{
+					"index": 0,
+					"message": {"role": "assistant", "content": "hello"},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 4,
+				"total_tokens": 14
+			}
+		}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{{
+		ID:           1,
+		Name:         "DeepSeek",
+		APIURL:       upstream.URL,
+		APIKey:       "test-key",
+		Enabled:      true,
+		ProviderType: "deepseek",
+	}}, AppSettings{
+		CaptureRawLogs: true,
+		RelayPort:      defaultRelayPort,
+		RawLogMaxBytes: defaultRawLogMaxBytes,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatalf("xdb.DB(default) error = %v", err)
+	}
+	var requestBody, responseBody, upstreamRequestBody, upstreamResponseBody string
+	if err := db.QueryRow(`
+		SELECT request_body, response_body, upstream_request_body, upstream_response_body
+		FROM request_log_payload
+		ORDER BY log_id DESC
+		LIMIT 1
+	`).Scan(&requestBody, &responseBody, &upstreamRequestBody, &upstreamResponseBody); err != nil {
+		t.Fatalf("select request_log_payload: %v", err)
+	}
+
+	if !strings.Contains(requestBody, `"input":"hi"`) {
+		t.Fatalf("request_body = %q, want original Codex request", requestBody)
+	}
+	if !strings.Contains(responseBody, `"output_text":"hello"`) {
+		t.Fatalf("response_body = %q, want translated Responses body", responseBody)
+	}
+	if got := gjson.Get(upstreamRequestBody, "messages.0.content").String(); got != "hi" {
+		t.Fatalf("upstream request user content = %q, want hi; body=%s", got, upstreamRequestBody)
+	}
+	if !strings.Contains(upstreamResponseBody, `"chatcmpl-123"`) {
+		t.Fatalf("upstream_response_body = %q, want raw DeepSeek response", upstreamResponseBody)
 	}
 }

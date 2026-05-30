@@ -17,12 +17,19 @@ import {
 } from '../../services/configImport'
 import { showToast } from '../../utils/toast'
 import BaseButton from '../common/BaseButton.vue'
+import BaseInput from '../common/BaseInput.vue'
 
 const router = useRouter()
 const { t } = useI18n()
+const DEFAULT_RELAY_PORT = 18101
 const heatmapEnabled = ref(true)
 const homeTitleVisible = ref(true)
 const autoStartEnabled = ref(false)
+const relayPort = ref(DEFAULT_RELAY_PORT)
+const relayPortInput = ref(String(DEFAULT_RELAY_PORT))
+const relayPortError = ref('')
+const rawLogCaptureEnabled = ref(false)
+const rawLogMaxBytes = ref(262144)
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 const importStatus = ref<ConfigImportStatus | null>(null)
@@ -40,32 +47,82 @@ const loadAppSettings = async () => {
     heatmapEnabled.value = data?.show_heatmap ?? true
     homeTitleVisible.value = data?.show_home_title ?? true
     autoStartEnabled.value = data?.auto_start ?? false
+    relayPort.value = data?.relay_port ?? DEFAULT_RELAY_PORT
+    relayPortInput.value = String(relayPort.value)
+    rawLogCaptureEnabled.value = data?.capture_raw_logs ?? false
+    rawLogMaxBytes.value = data?.raw_log_max_bytes ?? 262144
+    relayPortError.value = ''
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
     homeTitleVisible.value = true
     autoStartEnabled.value = false
+    relayPort.value = DEFAULT_RELAY_PORT
+    relayPortInput.value = String(DEFAULT_RELAY_PORT)
+    rawLogCaptureEnabled.value = false
+    rawLogMaxBytes.value = 262144
+    relayPortError.value = ''
   } finally {
     settingsLoading.value = false
   }
 }
 
-const persistAppSettings = async () => {
-  if (settingsLoading.value || saveBusy.value) return
+const persistAppSettings = async (): Promise<boolean> => {
+  if (settingsLoading.value || saveBusy.value) return false
   saveBusy.value = true
   try {
     const payload: AppSettings = {
       show_heatmap: heatmapEnabled.value,
       show_home_title: homeTitleVisible.value,
       auto_start: autoStartEnabled.value,
+      relay_port: relayPort.value,
+      capture_raw_logs: rawLogCaptureEnabled.value,
+      raw_log_max_bytes: rawLogMaxBytes.value,
     }
     await saveAppSettings(payload)
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
+    return true
   } catch (error) {
     console.error('failed to save app settings', error)
+    const message = error instanceof Error ? error.message : String(error)
+    showToast(message || t('components.general.relay.saveFailed'), 'error')
+    return false
   } finally {
     saveBusy.value = false
   }
+}
+
+const relayPortChanged = computed(() => relayPortInput.value.trim() !== String(relayPort.value))
+const relayPortSubLabel = computed(() =>
+  t('components.general.relay.subLabel', { port: relayPort.value }),
+)
+
+const parseRelayPortInput = () => {
+  const value = relayPortInput.value.trim()
+  if (!/^\d+$/.test(value)) return null
+  const port = Number(value)
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return null
+  return port
+}
+
+const persistRelayPort = async () => {
+  relayPortError.value = ''
+  const port = parseRelayPortInput()
+  if (port === null) {
+    relayPortError.value = t('components.general.relay.invalidPort')
+    return
+  }
+  if (port === relayPort.value) return
+
+  const previousPort = relayPort.value
+  relayPort.value = port
+  const ok = await persistAppSettings()
+  if (ok) {
+    relayPortInput.value = String(port)
+    showToast(t('components.general.relay.restartRequired'))
+    return
+  }
+  relayPort.value = previousPort
 }
 
 onMounted(() => {
@@ -302,6 +359,46 @@ const handleSecondaryImportAction = async () => {
             </label>
           </ListItem>
           <ListItem
+            :label="$t('components.general.label.relayPort')"
+            :sub-label="relayPortSubLabel"
+          >
+            <div class="relay-port-control">
+              <BaseInput
+                v-model="relayPortInput"
+                class="relay-port-input"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                :disabled="settingsLoading || saveBusy"
+                @keydown.enter.prevent="persistRelayPort"
+              />
+              <BaseButton
+                size="sm"
+                variant="outline"
+                type="button"
+                :disabled="settingsLoading || saveBusy || !relayPortChanged"
+                @click="persistRelayPort"
+              >
+                {{ $t('components.general.relay.save') }}
+              </BaseButton>
+              <span v-if="relayPortError" class="relay-port-error">{{ relayPortError }}</span>
+            </div>
+          </ListItem>
+          <ListItem
+            :label="$t('components.general.label.rawLogs')"
+            :sub-label="$t('components.general.rawLogs.subLabel')"
+          >
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="rawLogCaptureEnabled"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem
             v-if="showImportRow"
             :label="$t('components.general.import.label')"
             :sub-label="importDetailLabel"
@@ -373,5 +470,25 @@ const handleSecondaryImportAction = async () => {
 .import-actions .btn-outline,
 .import-actions .btn-ghost {
   padding-inline: 0.75rem;
+}
+
+.relay-port-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.relay-port-input {
+  width: 96px;
+  text-align: center;
+}
+
+.relay-port-error {
+  flex-basis: 100%;
+  text-align: right;
+  color: #d64545;
+  font-size: 0.72rem;
 }
 </style>

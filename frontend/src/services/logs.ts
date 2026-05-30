@@ -24,6 +24,20 @@ export type RequestLog = {
   has_pricing?: boolean
 }
 
+export type RequestLogPayload = {
+  log_id: number
+  has_payload: boolean
+  request_headers: string
+  request_body: string
+  response_headers: string
+  response_body: string
+  upstream_request_body: string
+  upstream_response_body: string
+  request_truncated: boolean
+  response_truncated: boolean
+  created_at: string
+}
+
 type RequestLogQuery = {
   platform?: string
   provider?: string
@@ -39,6 +53,10 @@ export const fetchRequestLogs = async (query: RequestLogQuery = {}): Promise<Req
 
 export const fetchLogProviders = async (platform = ''): Promise<string[]> => {
   return Call.ByName('codeswitch/services.LogService.ListProviders', platform)
+}
+
+export const fetchRequestLogPayload = async (id: number): Promise<RequestLogPayload> => {
+  return Call.ByName('codeswitch/services.LogService.GetRequestLogPayload', id)
 }
 
 export type LogStatsSeries = {

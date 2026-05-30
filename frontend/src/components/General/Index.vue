@@ -30,6 +30,7 @@ const relayPortInput = ref(String(DEFAULT_RELAY_PORT))
 const relayPortError = ref('')
 const rawLogCaptureEnabled = ref(false)
 const rawLogMaxBytes = ref(262144)
+const claudeThinkingRectifierEnabled = ref(true)
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 const importStatus = ref<ConfigImportStatus | null>(null)
@@ -51,6 +52,7 @@ const loadAppSettings = async () => {
     relayPortInput.value = String(relayPort.value)
     rawLogCaptureEnabled.value = data?.capture_raw_logs ?? false
     rawLogMaxBytes.value = data?.raw_log_max_bytes ?? 262144
+    claudeThinkingRectifierEnabled.value = data?.claude_thinking_rectifier ?? true
     relayPortError.value = ''
   } catch (error) {
     console.error('failed to load app settings', error)
@@ -61,6 +63,7 @@ const loadAppSettings = async () => {
     relayPortInput.value = String(DEFAULT_RELAY_PORT)
     rawLogCaptureEnabled.value = false
     rawLogMaxBytes.value = 262144
+    claudeThinkingRectifierEnabled.value = true
     relayPortError.value = ''
   } finally {
     settingsLoading.value = false
@@ -78,6 +81,7 @@ const persistAppSettings = async (): Promise<boolean> => {
       relay_port: relayPort.value,
       capture_raw_logs: rawLogCaptureEnabled.value,
       raw_log_max_bytes: rawLogMaxBytes.value,
+      claude_thinking_rectifier: claudeThinkingRectifierEnabled.value,
     }
     await saveAppSettings(payload)
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
@@ -393,6 +397,20 @@ const handleSecondaryImportAction = async () => {
                 type="checkbox"
                 :disabled="settingsLoading || saveBusy"
                 v-model="rawLogCaptureEnabled"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem
+            :label="$t('components.general.label.claudeThinkingRectifier')"
+            :sub-label="$t('components.general.claudeThinkingRectifier.subLabel')"
+          >
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="claudeThinkingRectifierEnabled"
                 @change="persistAppSettings"
               />
               <span></span>

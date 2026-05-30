@@ -12,8 +12,8 @@
     "home": {},
     "provider": {
       "modelWhitelist": {
-        "label": "模型白名单",
-        "tooltip": "声明该供应商支持的模型。支持精确匹配（claude-sonnet-4）和通配符（claude-*）",
+        "label": "支持模型（可选）",
+        "tooltip": "可选。声明该供应商支持的模型，用于过滤不可用模型；不配置时不会限制模型。支持精确匹配（claude-sonnet-4）和通配符（claude-*）",
         "placeholder": "输入模型名称，如 claude-*",
         "add": "添加",
         "remove": "删除模型",
@@ -25,8 +25,8 @@
         }
       },
       "modelMapping": {
-        "label": "模型映射",
-        "tooltip": "将外部模型名称映射到供应商内部模型名称。支持通配符展开",
+        "label": "模型映射（可选）",
+        "tooltip": "可选。将外部模型名称映射到供应商内部模型名称；不配置时模型名原样转发。支持通配符展开",
         "keyPlaceholder": "外部模型名（如 claude-*）",
         "valuePlaceholder": "内部模型名（如 anthropic/claude-*）",
         "add": "添加",
@@ -143,7 +143,8 @@
         "confirmDeleteTitle": "删除供应商",
         "confirmDeleteMessage": "确认删除 {name} 吗？操作不可撤销",
         "errors": {
-          "invalidUrl": "请输入合法的 API 地址"
+          "invalidUrl": "请输入合法的 API 地址",
+          "saveFailed": "保存供应商失败"
         }
       },
       "levelDesc": {
@@ -257,6 +258,7 @@
         "autoStart": "开机自启动",
         "relayPort": "本地代理端口",
         "rawLogs": "保存原始请求/响应",
+        "claudeThinkingRectifier": "Claude Thinking 兼容修复",
         "automatic_up": "自动检查更新",
         "next_up": "下次启动自动检查更新"
       },
@@ -278,6 +280,9 @@
       },
       "rawLogs": {
         "subLabel": "默认关闭。开启后仅保存新请求，内容可能包含 Prompt、工具输出或文件片段。"
+      },
+      "claudeThinkingRectifier": {
+        "subLabel": "默认开启。Claude 代理遇到 thinking 签名或 budget 兼容错误时，会修正请求并对同一服务商重试一次。"
       },
       "import": {
         "label": "导入 cc-switch 配置",

@@ -294,7 +294,11 @@
           </div>
           <div class="card-actions">
             <label class="mac-switch sm">
-              <input type="checkbox" v-model="card.enabled" @change="persistProviders(activeTab)" />
+              <input
+                type="checkbox"
+                :checked="card.enabled"
+                @change="onProviderEnabledChange(card, activeTab, $event)"
+              />
               <span></span>
             </label>
             <button class="ghost-icon" @click="configure(card)">
@@ -483,6 +487,7 @@ import {
 } from '../../data/usageHeatmap'
 import { automationCardGroups, createAutomationCards, type AutomationCard } from '../../data/cards'
 import { defaultProviderType, normalizeProviderType, providerTypeOptions } from '../../data/providerTypes'
+import { createSequentialTaskQueue } from '../../services/providerSaveQueue'
 import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
@@ -495,6 +500,12 @@ import { fetchHeatmapStats, fetchProviderDailyStats, type ProviderDailyStat } fr
 import { fetchCurrentVersion } from '../../services/version'
 import { fetchAppSettings, type AppSettings } from '../../services/appSettings'
 import { getCurrentTheme, setTheme, type ThemeMode } from '../../utils/ThemeManager'
+import { showToast } from '../../utils/toast'
+import {
+  providerPersistenceErrorMessage,
+  saveProviderSnapshot,
+  serializeProviderSnapshots,
+} from '../../services/providerPersistence'
 import { useRouter } from 'vue-router'
 
 const { t, locale } = useI18n()
@@ -789,14 +800,35 @@ const cards = reactive<Record<ProviderTab, AutomationCard[]>>({
   codex: createAutomationCards(automationCardGroups.codex),
 })
 const draggingId = ref<number | null>(null)
+const providerSaveQueues: Record<ProviderTab, ReturnType<typeof createSequentialTaskQueue>> = {
+  claude: createSequentialTaskQueue(),
+  codex: createSequentialTaskQueue(),
+}
 
-const serializeProviders = (providers: AutomationCard[]) => providers.map((provider) => ({ ...provider }))
+const serializeProviders = (providers: AutomationCard[]) => serializeProviderSnapshots(providers)
 
-const persistProviders = async (tabId: ProviderTab) => {
+const persistProviderList = (tabId: ProviderTab, providers: AutomationCard[]) => {
+  const snapshot = serializeProviders(providers)
+  return providerSaveQueues[tabId](() => saveProviderSnapshot(tabId, snapshot, SaveProviders))
+}
+
+const persistProviders = (tabId: ProviderTab) => persistProviderList(tabId, cards[tabId])
+
+const showProviderSaveError = (error: unknown) => {
+  console.error('Failed to save providers', error)
+  showToast(
+    providerPersistenceErrorMessage(error, t('components.main.form.errors.saveFailed')),
+    'error',
+  )
+}
+
+const saveProviderListWithFeedback = async (tabId: ProviderTab, providers: AutomationCard[]) => {
   try {
-    await SaveProviders(tabId, serializeProviders(cards[tabId]))
+    await persistProviderList(tabId, providers)
+    return true
   } catch (error) {
-    console.error('Failed to save providers', error)
+    showProviderSaveError(error)
+    return false
   }
 }
 
@@ -1104,7 +1136,7 @@ const closeConfirm = () => {
   confirmState.card = null
 }
 
-const submitModal = () => {
+const submitModal = async () => {
   const list = cards[modalState.tabId]
   if (!list) return
   const name = modalState.form.name.trim()
@@ -1122,18 +1154,24 @@ const submitModal = () => {
     return
   }
 
+  const currentProviders = serializeProviders(list)
+  let nextProviders: AutomationCard[]
   if (editingCard.value) {
-    Object.assign(editingCard.value, {
-      apiUrl: apiUrl || editingCard.value.apiUrl,
-      apiKey,
-      officialSite,
-      icon,
-      providerType,
-      enabled: modalState.form.enabled,
-      supportedModels: modalState.form.supportedModels || {},
-      modelMapping: modalState.form.modelMapping || {},
-    })
-    void persistProviders(modalState.tabId)
+    nextProviders = currentProviders.map((provider) =>
+      provider.id === editingCard.value?.id
+        ? {
+            ...provider,
+            apiUrl: apiUrl || provider.apiUrl,
+            apiKey,
+            officialSite,
+            icon,
+            providerType,
+            enabled: modalState.form.enabled,
+            supportedModels: modalState.form.supportedModels || {},
+            modelMapping: modalState.form.modelMapping || {},
+          }
+        : provider,
+    )
   } else {
     const newCard: AutomationCard = {
       id: Date.now(),
@@ -1149,10 +1187,13 @@ const submitModal = () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
     }
-    list.push(newCard)
-    void persistProviders(modalState.tabId)
+    nextProviders = [...currentProviders, newCard]
   }
 
+  const saved = await saveProviderListWithFeedback(modalState.tabId, nextProviders)
+  if (!saved) return
+
+  replaceProviders(modalState.tabId, nextProviders)
   closeModal()
 }
 
@@ -1160,14 +1201,29 @@ const configure = (card: AutomationCard) => {
   openEditModal(card)
 }
 
-const remove = (id: number, tabId: ProviderTab = activeTab.value) => {
+const onProviderEnabledChange = async (card: AutomationCard, tabId: ProviderTab, event: Event) => {
+  const target = event.target as HTMLInputElement | null
   const list = cards[tabId]
-  if (!list) return
-  const index = list.findIndex((card) => card.id === id)
-  if (index > -1) {
-    list.splice(index, 1)
-    void persistProviders(tabId)
+  if (!target || !list) return
+  const nextProviders = serializeProviders(list).map((provider) =>
+    provider.id === card.id ? { ...provider, enabled: target.checked } : provider,
+  )
+  const saved = await saveProviderListWithFeedback(tabId, nextProviders)
+  if (saved) {
+    replaceProviders(tabId, nextProviders)
   }
+}
+
+const remove = async (id: number, tabId: ProviderTab = activeTab.value) => {
+  const list = cards[tabId]
+  if (!list) return false
+  const nextProviders = serializeProviders(list).filter((card) => card.id !== id)
+  if (nextProviders.length === list.length) return false
+  const saved = await saveProviderListWithFeedback(tabId, nextProviders)
+  if (saved) {
+    replaceProviders(tabId, nextProviders)
+  }
+  return saved
 }
 
 const requestRemove = (card: AutomationCard) => {
@@ -1176,17 +1232,19 @@ const requestRemove = (card: AutomationCard) => {
   confirmState.open = true
 }
 
-const confirmRemove = () => {
+const confirmRemove = async () => {
   if (!confirmState.card) return
-  remove(confirmState.card.id, confirmState.tabId)
-  closeConfirm()
+  const removed = await remove(confirmState.card.id, confirmState.tabId)
+  if (removed) {
+    closeConfirm()
+  }
 }
 
 const onDragStart = (id: number) => {
   draggingId.value = id
 }
 
-const onDrop = (targetId: number) => {
+const onDrop = async (targetId: number) => {
   if (draggingId.value === null || draggingId.value === targetId) return
   const currentTab = activeTab.value
   const list = cards[currentTab]
@@ -1194,11 +1252,15 @@ const onDrop = (targetId: number) => {
   const fromIndex = list.findIndex((card) => card.id === draggingId.value)
   const toIndex = list.findIndex((card) => card.id === targetId)
   if (fromIndex === -1 || toIndex === -1) return
-  const [moved] = list.splice(fromIndex, 1)
+  const nextProviders = serializeProviders(list)
+  const [moved] = nextProviders.splice(fromIndex, 1)
   const newIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
-  list.splice(newIndex, 0, moved)
+  nextProviders.splice(newIndex, 0, moved)
   draggingId.value = null
-  void persistProviders(currentTab)
+  const saved = await saveProviderListWithFeedback(currentTab, nextProviders)
+  if (saved) {
+    replaceProviders(currentTab, nextProviders)
+  }
 }
 
 const onDragEnd = () => {

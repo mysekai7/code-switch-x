@@ -263,6 +263,42 @@ func TestProviderConfigValidation(t *testing.T) {
 	}
 }
 
+func TestProviderRelayValidateConfigDoesNotWarnForMissingOptionalModelConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	providerService := NewProviderService()
+	if err := providerService.SaveProviders("claude", []Provider{
+		{
+			ID:      1,
+			Name:    "plain-claude",
+			APIURL:  "https://example.com",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	}); err != nil {
+		t.Fatalf("save claude provider: %v", err)
+	}
+	if err := providerService.SaveProviders("codex", []Provider{
+		{
+			ID:      2,
+			Name:    "plain-codex",
+			APIURL:  "https://example.com/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	}); err != nil {
+		t.Fatalf("save codex provider: %v", err)
+	}
+
+	relay := NewProviderRelayService(providerService, ":0")
+	warnings := relay.validateConfig()
+	for _, warning := range warnings {
+		if strings.Contains(warning, "未配置 supportedModels 或 modelMapping") {
+			t.Fatalf("validateConfig() warning = %q, want no warning for optional model config", warning)
+		}
+	}
+}
+
 // ==================== 代理兼容性测试 ====================
 
 func TestClaudeAuthModeInference(t *testing.T) {
@@ -349,6 +385,249 @@ func TestProxyHandlerUsesExplicitClaudeAnthropicAuthMode(t *testing.T) {
 	}
 	if upstreamAnthropicVersion == "" {
 		t.Fatal("upstream Anthropic-Version is empty, want default version")
+	}
+}
+
+func TestProxyHandlerRetriesClaudeThinkingSignatureErrorWhenEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	var secondBody string
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		if calls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"messages.1.content.0: Invalid signature in thinking block"}}`))
+			return
+		}
+		secondBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Claude Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "provider-secret",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-4",
+		"max_tokens":4096,
+		"thinking":{"type":"enabled","budget_tokens":2048},
+		"messages":[{
+			"role":"assistant",
+			"content":[
+				{"type":"thinking","thinking":"need tool","signature":"sig-thinking"},
+				{"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"README.md"},"signature":"sig-tool"}
+			]
+		}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+	if strings.Contains(secondBody, "signature") || strings.Contains(secondBody, "redacted_thinking") || strings.Contains(secondBody, `"type":"thinking"`) {
+		t.Fatalf("retried body still contains incompatible thinking data: %s", secondBody)
+	}
+	if gjson.Get(secondBody, "thinking").Exists() {
+		t.Fatalf("retried body still contains top-level thinking: %s", secondBody)
+	}
+}
+
+func TestProxyHandlerDoesNotRetryClaudeThinkingErrorWhenDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"messages.1.content.0: Invalid signature in thinking block"}}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Claude Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "provider-secret",
+		Enabled: true,
+	}}, AppSettings{
+		RelayPort:               defaultRelayPort,
+		RawLogMaxBytes:          defaultRawLogMaxBytes,
+		ClaudeThinkingRectifier: false,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-4",
+		"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"sig"}]}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
+	}
+}
+
+func TestProxyHandlerDoesNotRetryThinkingErrorForCodex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"messages.1.content.0: Invalid signature in thinking block"}}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{{
+		ID:      1,
+		Name:    "Codex Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "provider-secret",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{
+		"model":"gpt-5",
+		"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"sig"}]}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
+	}
+}
+
+func TestProxyHandlerRetriesClaudeThinkingBudgetErrorWhenEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	var secondBody string
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		if calls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"thinking.budget_tokens: Input should be greater than or equal to 1024"}}`))
+			return
+		}
+		secondBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Claude Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "provider-secret",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-4",
+		"max_tokens":1024,
+		"thinking":{"type":"disabled","budget_tokens":512},
+		"messages":[{"role":"user","content":"hi"}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+	if gotType := gjson.Get(secondBody, "thinking.type").String(); gotType != "enabled" {
+		t.Fatalf("retried thinking.type = %q, want enabled; body=%s", gotType, secondBody)
+	}
+	if gotBudget := gjson.Get(secondBody, "thinking.budget_tokens").Int(); gotBudget != 32000 {
+		t.Fatalf("retried thinking.budget_tokens = %d, want 32000; body=%s", gotBudget, secondBody)
+	}
+	if gotMax := gjson.Get(secondBody, "max_tokens").Int(); gotMax != 64000 {
+		t.Fatalf("retried max_tokens = %d, want 64000; body=%s", gotMax, secondBody)
+	}
+}
+
+func TestProxyHandlerRetriesClaudeThinkingBudgetWhenSignatureFallbackAlsoMatches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	var secondBody string
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		if calls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Invalid request: thinking.budget_tokens: Input should be greater than or equal to 1024"}}`))
+			return
+		}
+		secondBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Claude Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "provider-secret",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"claude-sonnet-4",
+		"max_tokens":1024,
+		"thinking":{"type":"disabled","budget_tokens":512},
+		"messages":[{"role":"user","content":"hi"}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("upstream calls = %d, want 2", calls)
+	}
+	if gotBudget := gjson.Get(secondBody, "thinking.budget_tokens").Int(); gotBudget != 32000 {
+		t.Fatalf("retried thinking.budget_tokens = %d, want 32000; body=%s", gotBudget, secondBody)
 	}
 }
 

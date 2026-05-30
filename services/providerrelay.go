@@ -123,13 +123,6 @@ func (prs *ProviderRelayService) validateConfig() []string {
 				}
 			}
 
-			// 检查是否配置了模型白名单或映射
-			if (p.SupportedModels == nil || len(p.SupportedModels) == 0) &&
-				(p.ModelMapping == nil || len(p.ModelMapping) == 0) {
-				warnings = append(warnings, fmt.Sprintf(
-					"[%s/%s] 未配置 supportedModels 或 modelMapping，将假设支持所有模型（可能导致降级失败）",
-					kind, p.Name))
-			}
 		}
 
 		if enabledCount == 0 {
@@ -380,13 +373,102 @@ func (prs *ProviderRelayService) forwardRequest(
 		return copyErr == nil, copyErr
 	}
 
-	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if retryResp, retried, err := prs.retryClaudeThinkingRectifiedRequest(kind, targetURL, query, headers, bodyBytes, body, requestLog); err != nil {
+		return false, err
+	} else if retried {
+		if retryResp == nil {
+			return false, fmt.Errorf("empty response")
+		}
+		defer retryResp.Body.Close()
+		requestLog.HttpCode = retryResp.StatusCode
+		if retryResp.StatusCode >= http.StatusOK && retryResp.StatusCode < http.StatusMultipleChoices {
+			hooks := []func([]byte) (bool, []byte){}
+			if requestLog.RawLog != nil {
+				requestLog.RawLog.captureResponseHeaders(retryResp.Header)
+				hooks = append(hooks, requestLog.RawLog.responseHook())
+			}
+			hooks = append(hooks, ReqeustLogHook(c, kind, requestLog))
+			_, copyErr := writeUpstreamResponse(c.Writer, retryResp, hooks...)
+			return copyErr == nil, copyErr
+		}
+		retryBody, _ := io.ReadAll(retryResp.Body)
+		if requestLog.RawLog != nil {
+			requestLog.RawLog.captureResponseHeaders(retryResp.Header)
+			requestLog.RawLog.captureResponseBody(retryBody)
+		}
+		return false, newUpstreamResponseError(retryResp.StatusCode, retryResp.Header, retryBody)
+	}
 	if requestLog.RawLog != nil {
 		requestLog.RawLog.captureResponseHeaders(resp.Header)
 		requestLog.RawLog.captureResponseBody(body)
 	}
 	return false, newUpstreamResponseError(status, resp.Header, body)
+}
+
+func (prs *ProviderRelayService) retryClaudeThinkingRectifiedRequest(
+	kind string,
+	targetURL string,
+	query map[string]string,
+	headers map[string]string,
+	bodyBytes []byte,
+	errorBody []byte,
+	requestLog *ReqeustLog,
+) (*http.Response, bool, error) {
+	if kind != "claude" || !prs.claudeThinkingRectifierEnabled() {
+		return nil, false, nil
+	}
+
+	if shouldRectifyClaudeThinkingSignature(errorBody) {
+		rectified, applied, err := rectifyClaudeThinkingSignatureRequest(bodyBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		if applied {
+			return postClaudeThinkingRectifiedRequest(targetURL, query, headers, rectified, requestLog)
+		}
+	}
+
+	if shouldRectifyClaudeThinkingBudget(errorBody) {
+		rectified, applied, err := rectifyClaudeThinkingBudgetRequest(bodyBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		if applied {
+			return postClaudeThinkingRectifiedRequest(targetURL, query, headers, rectified, requestLog)
+		}
+	}
+
+	return nil, false, nil
+}
+
+func postClaudeThinkingRectifiedRequest(
+	targetURL string,
+	query map[string]string,
+	headers map[string]string,
+	rectified []byte,
+	requestLog *ReqeustLog,
+) (*http.Response, bool, error) {
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureUpstreamRequestBody(rectified)
+	}
+	retryResp, err := postUpstream(targetURL, query, headers, rectified)
+	if err != nil {
+		return nil, true, err
+	}
+	return retryResp, true, nil
+}
+
+func (prs *ProviderRelayService) claudeThinkingRectifierEnabled() bool {
+	if prs.appSettingsService == nil {
+		return true
+	}
+	settings, err := prs.appSettingsService.GetAppSettings()
+	if err != nil {
+		return true
+	}
+	return settings.ClaudeThinkingRectifier
 }
 
 func isCodexResponsesEndpoint(endpoint string) bool {

@@ -11,8 +11,8 @@
   "components": {
     "provider": {
       "modelWhitelist": {
-        "label": "Supported Models",
-        "tooltip": "Declare which models this provider supports. Supports exact match (claude-sonnet-4) and wildcard (claude-*)",
+        "label": "Supported Models (Optional)",
+        "tooltip": "Optional. Declare which models this provider supports to filter unavailable models; leave empty to avoid model restrictions. Supports exact match (claude-sonnet-4) and wildcard (claude-*)",
         "placeholder": "e.g., claude-*",
         "add": "Add",
         "remove": "Remove model",
@@ -24,8 +24,8 @@
         }
       },
       "modelMapping": {
-        "label": "Model Mapping",
-        "tooltip": "Map external model names to provider-specific names. Supports wildcard expansion",
+        "label": "Model Mapping (Optional)",
+        "tooltip": "Optional. Map external model names to provider-specific names; leave empty to forward model names unchanged. Supports wildcard expansion",
         "keyPlaceholder": "External model (e.g., claude-*)",
         "valuePlaceholder": "Internal model (e.g., anthropic/claude-*)",
         "add": "Add",
@@ -142,7 +142,8 @@
         "confirmDeleteTitle": "Remove vendor",
         "confirmDeleteMessage": "Are you sure you want to remove {name}? This action cannot be undone.",
         "errors": {
-          "invalidUrl": "Please enter a valid API URL"
+          "invalidUrl": "Please enter a valid API URL",
+          "saveFailed": "Failed to save vendor"
         }
       },
       "levelDesc": {
@@ -257,7 +258,8 @@
         "homeTitle": "Show home title",
         "autoStart": "Launch at login",
         "relayPort": "Local relay port",
-        "rawLogs": "Save raw request/response"
+        "rawLogs": "Save raw request/response",
+        "claudeThinkingRectifier": "Claude thinking compatibility fix"
       },
       "subLabel": {
         "sb_assistant_access": "Accessibility permission is required to operate clipboard contents",
@@ -277,6 +279,9 @@
       },
       "rawLogs": {
         "subLabel": "Off by default. When enabled, only new requests are saved and may include prompts, tool output, or file snippets."
+      },
+      "claudeThinkingRectifier": {
+        "subLabel": "On by default. When the Claude proxy hits thinking signature or budget compatibility errors, it fixes the request and retries the same provider once."
       },
       "import": {
         "label": "Import cc-switch data",

@@ -7,6 +7,7 @@ export type AppSettings = {
   relay_port: number
   capture_raw_logs: boolean
   raw_log_max_bytes: number
+  claude_thinking_rectifier: boolean
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -16,11 +17,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   relay_port: 18101,
   capture_raw_logs: false,
   raw_log_max_bytes: 262144,
+  claude_thinking_rectifier: true,
 }
 
 export const fetchAppSettings = async (): Promise<AppSettings> => {
   const data = await Call.ByName('codeswitch/services.AppSettingsService.GetAppSettings')
-  return data ?? DEFAULT_SETTINGS
+  return { ...DEFAULT_SETTINGS, ...(data ?? {}) }
 }
 
 export const saveAppSettings = async (settings: AppSettings): Promise<AppSettings> => {

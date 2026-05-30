@@ -19,12 +19,13 @@ const (
 )
 
 type AppSettings struct {
-	ShowHeatmap    bool `json:"show_heatmap"`
-	ShowHomeTitle  bool `json:"show_home_title"`
-	AutoStart      bool `json:"auto_start"`
-	RelayPort      int  `json:"relay_port"`
-	CaptureRawLogs bool `json:"capture_raw_logs"`
-	RawLogMaxBytes int  `json:"raw_log_max_bytes"`
+	ShowHeatmap             bool `json:"show_heatmap"`
+	ShowHomeTitle           bool `json:"show_home_title"`
+	AutoStart               bool `json:"auto_start"`
+	RelayPort               int  `json:"relay_port"`
+	CaptureRawLogs          bool `json:"capture_raw_logs"`
+	RawLogMaxBytes          int  `json:"raw_log_max_bytes"`
+	ClaudeThinkingRectifier bool `json:"claude_thinking_rectifier"`
 }
 
 type AppSettingsService struct {
@@ -55,12 +56,13 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 	}
 
 	return AppSettings{
-		ShowHeatmap:    true,
-		ShowHomeTitle:  true,
-		AutoStart:      autoStartEnabled,
-		RelayPort:      defaultRelayPort,
-		CaptureRawLogs: false,
-		RawLogMaxBytes: defaultRawLogMaxBytes,
+		ShowHeatmap:             true,
+		ShowHomeTitle:           true,
+		AutoStart:               autoStartEnabled,
+		RelayPort:               defaultRelayPort,
+		CaptureRawLogs:          false,
+		RawLogMaxBytes:          defaultRawLogMaxBytes,
+		ClaudeThinkingRectifier: true,
 	}
 }
 

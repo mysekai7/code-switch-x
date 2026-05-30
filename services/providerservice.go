@@ -264,8 +264,9 @@ func (p *Provider) ValidateConfiguration() []string {
 	// DeepSeek 走协议转换模式，模型映射通常由用户直接指定，
 	// 不强制要求本地白名单可验证。
 	if providerType != "deepseek" {
-		// 规则 1：ModelMapping 的 value 必须在 SupportedModels 中
-		if p.ModelMapping != nil && p.SupportedModels != nil {
+		// 规则 1：如果显式配置了 SupportedModels，ModelMapping 的 value 必须在白名单中。
+		// 未配置白名单时无法验证目标模型，保留映射并在运行时交给上游处理。
+		if p.ModelMapping != nil && len(p.SupportedModels) > 0 {
 			for externalModel, internalModel := range p.ModelMapping {
 				// 检查是否为通配符映射
 				if strings.Contains(internalModel, "*") {
@@ -293,26 +294,6 @@ func (p *Provider) ValidateConfiguration() []string {
 						externalModel, internalModel, internalModel,
 					))
 				}
-			}
-		}
-
-		// 规则 2：如果配置了 ModelMapping 但未配置 SupportedModels，给出警告
-		if p.ModelMapping != nil && len(p.ModelMapping) > 0 &&
-			(p.SupportedModels == nil || len(p.SupportedModels) == 0) {
-			errors = append(errors,
-				"警告：配置了 modelMapping 但未配置 supportedModels，映射的目标模型无法验证",
-			)
-		}
-	}
-
-	// 规则 3：检测自映射（通常无意义，但不是错误）
-	if p.ModelMapping != nil {
-		for external, internal := range p.ModelMapping {
-			if external == internal {
-				errors = append(errors, fmt.Sprintf(
-					"警告：模型 '%s' 映射到自身，这通常无意义",
-					external,
-				))
 			}
 		}
 	}

@@ -13,10 +13,9 @@ export type UsageHeatmapDay = {
 
 export type UsageHeatmapWeek = UsageHeatmapDay[]
 
-export const HEATMAP_ROWS = 8
-export const BUCKETS_PER_DAY = 3
+export const HEATMAP_ROWS = 6
+export const BUCKETS_PER_DAY = 4
 export const DEFAULT_HEATMAP_DAYS = 14
-const HOURS_PER_BUCKET = 8
 const LEVELS = 4
 
 const clampDays = (days?: number) => (days && days > 0 ? Math.floor(days) : DEFAULT_HEATMAP_DAYS)

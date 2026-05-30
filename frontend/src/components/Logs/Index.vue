@@ -124,7 +124,7 @@
     </div>
 
     <div v-if="selectedLog" class="raw-log-backdrop" @click.self="closeLogDetails">
-      <aside class="raw-log-drawer" role="dialog" aria-modal="true">
+      <section class="raw-log-modal" role="dialog" aria-modal="true">
         <header class="raw-log-header">
           <div>
             <p class="raw-log-eyebrow">{{ t('components.logs.details.eyebrow') }}</p>
@@ -139,11 +139,13 @@
           </BaseButton>
         </header>
 
-        <p v-if="payloadLoading" class="raw-log-empty">{{ t('components.logs.details.loading') }}</p>
-        <p v-else-if="payloadError" class="raw-log-empty">{{ payloadError }}</p>
-        <p v-else-if="!selectedPayload?.has_payload" class="raw-log-empty">
-          {{ t('components.logs.details.noPayload') }}
-        </p>
+        <div v-if="payloadLoading || payloadError || !selectedPayload?.has_payload" class="raw-log-body">
+          <p v-if="payloadLoading" class="raw-log-empty">{{ t('components.logs.details.loading') }}</p>
+          <p v-else-if="payloadError" class="raw-log-empty">{{ payloadError }}</p>
+          <p v-else class="raw-log-empty">
+            {{ t('components.logs.details.noPayload') }}
+          </p>
+        </div>
         <template v-else>
           <nav class="raw-log-tabs">
             <button
@@ -157,19 +159,21 @@
             </button>
           </nav>
 
-          <div class="raw-log-content">
-            <article v-for="block in currentPayloadBlocks" :key="block.key" class="raw-log-block">
-              <div class="raw-log-block-title">
-                <span>{{ block.title }}</span>
-                <span v-if="block.truncated" class="raw-log-truncated">
-                  {{ t('components.logs.details.truncated') }}
-                </span>
-              </div>
-              <pre>{{ formatPayloadBlock(block.value) }}</pre>
-            </article>
+          <div class="raw-log-body">
+            <div class="raw-log-content">
+              <article v-for="block in currentPayloadBlocks" :key="block.key" class="raw-log-block">
+                <div class="raw-log-block-title">
+                  <span>{{ block.title }}</span>
+                  <span v-if="block.truncated" class="raw-log-truncated">
+                    {{ t('components.logs.details.truncated') }}
+                  </span>
+                </div>
+                <pre>{{ formatPayloadBlock(block.value) }}</pre>
+              </article>
+            </div>
           </div>
         </template>
-      </aside>
+      </section>
     </div>
   </div>
 </template>
@@ -222,6 +226,7 @@ const payloadError = ref('')
 const payloadTab = ref<PayloadTab>('request')
 
 const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined'
+const RAW_LOG_SCROLL_LOCK_CLASS = 'raw-log-scroll-lock'
 const readDarkMode = () => (isBrowser ? document.documentElement.classList.contains('dark') : false)
 const isDarkMode = ref(readDarkMode())
 let themeObserver: MutationObserver | null = null
@@ -254,6 +259,16 @@ const teardownThemeObserver = () => {
   if (!themeObserver) return
   themeObserver.disconnect()
   themeObserver = null
+}
+
+const syncRawLogScrollLock = (locked: boolean) => {
+  if (!isBrowser) return
+  document.body.classList.toggle(RAW_LOG_SCROLL_LOCK_CLASS, locked)
+}
+
+const clearRawLogScrollLock = () => {
+  if (!isBrowser) return
+  document.body.classList.remove(RAW_LOG_SCROLL_LOCK_CLASS)
 }
 
 const parseLogDate = (value?: string) => {
@@ -710,6 +725,10 @@ watch(
   },
 )
 
+watch(selectedLog, (log) => {
+  syncRawLogScrollLock(Boolean(log))
+})
+
 onMounted(async () => {
   await Promise.all([loadDashboard(), loadProviderOptions()])
   startCountdown()
@@ -719,6 +738,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopCountdown()
   teardownThemeObserver()
+  clearRawLogScrollLock()
 })
 </script>
 

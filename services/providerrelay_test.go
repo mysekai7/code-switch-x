@@ -715,6 +715,167 @@ func TestProxyHandlerKeepsLastUpstreamErrorWhenLaterProviderHasNoResponse(t *tes
 	}
 }
 
+func TestProxyHandlerFormatsClaudePlainText413AsAnthropicError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const upstreamMessage = "Maximum request body size 1048576 exceeded, actual body size 1080440"
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(upstreamMessage))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Claude Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "test-key",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := gjson.Get(rec.Body.String(), "type").String(); got != "error" {
+		t.Fatalf("type = %q, want error; body=%s", got, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "request_too_large" {
+		t.Fatalf("error.type = %q, want request_too_large; body=%s", got, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.message").String(); got != upstreamMessage {
+		t.Fatalf("error.message = %q, want %q; body=%s", got, upstreamMessage, rec.Body.String())
+	}
+}
+
+func TestProxyHandlerDoesNotFallbackClaudeNonRetryableUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte("payload too large"))
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{
+		{
+			ID:      1,
+			Name:    "Too Large Relay",
+			APIURL:  first.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+		{
+			ID:      2,
+			Name:    "Fallback Relay",
+			APIURL:  second.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+	if firstCalls != 1 {
+		t.Fatalf("first upstream calls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 0 {
+		t.Fatalf("second upstream calls = %d, want 0", secondCalls)
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "request_too_large" {
+		t.Fatalf("error.type = %q, want request_too_large; body=%s", got, rec.Body.String())
+	}
+}
+
+func TestProxyHandlerDoesNotFallbackClaudeRateLimitError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limited by upstream"}}`))
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{
+		{
+			ID:      1,
+			Name:    "Rate Limited Relay",
+			APIURL:  first.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+		{
+			ID:      2,
+			Name:    "Fallback Relay",
+			APIURL:  second.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if firstCalls != 1 {
+		t.Fatalf("first upstream calls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 0 {
+		t.Fatalf("second upstream calls = %d, want 0", secondCalls)
+	}
+	if got := gjson.Get(rec.Body.String(), "type").String(); got != "error" {
+		t.Fatalf("type = %q, want error; body=%s", got, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "rate_limit_error" {
+		t.Fatalf("error.type = %q, want rate_limit_error; body=%s", got, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.message").String(); got != "rate limited by upstream" {
+		t.Fatalf("error.message = %q, want rate limited by upstream; body=%s", got, rec.Body.String())
+	}
+}
+
 func TestRegisterRoutesSupportsOpenAIResponsesPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

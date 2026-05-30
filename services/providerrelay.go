@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -278,6 +279,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			var upstreamErr *upstreamResponseError
 			if errors.As(err, &upstreamErr) {
 				lastUpstreamErr = upstreamErr
+				if kind == "claude" && isClaudeNonRetryableUpstreamStatus(upstreamErr.statusCode) {
+					writeUpstreamError(c, upstreamErr)
+					return
+				}
 			}
 		}
 
@@ -394,11 +399,29 @@ func (prs *ProviderRelayService) forwardRequest(
 			return copyErr == nil, copyErr
 		}
 		retryBody, _ := io.ReadAll(retryResp.Body)
+		if kind == "claude" {
+			headers, normalizedBody := normalizeClaudeUpstreamErrorResponse(retryResp.StatusCode, retryResp.Header, retryBody)
+			if requestLog.RawLog != nil {
+				requestLog.RawLog.captureResponseHeaders(headers)
+				requestLog.RawLog.captureResponseBody(normalizedBody)
+				requestLog.RawLog.captureUpstreamResponseBody(retryBody)
+			}
+			return false, newUpstreamResponseError(retryResp.StatusCode, headers, normalizedBody)
+		}
 		if requestLog.RawLog != nil {
 			requestLog.RawLog.captureResponseHeaders(retryResp.Header)
 			requestLog.RawLog.captureResponseBody(retryBody)
 		}
 		return false, newUpstreamResponseError(retryResp.StatusCode, retryResp.Header, retryBody)
+	}
+	if kind == "claude" {
+		headers, normalizedBody := normalizeClaudeUpstreamErrorResponse(status, resp.Header, body)
+		if requestLog.RawLog != nil {
+			requestLog.RawLog.captureResponseHeaders(headers)
+			requestLog.RawLog.captureResponseBody(normalizedBody)
+			requestLog.RawLog.captureUpstreamResponseBody(body)
+		}
+		return false, newUpstreamResponseError(status, headers, normalizedBody)
 	}
 	if requestLog.RawLog != nil {
 		requestLog.RawLog.captureResponseHeaders(resp.Header)
@@ -598,6 +621,103 @@ func writeUpstreamError(c *gin.Context, upstreamErr *upstreamResponseError) {
 	if len(upstreamErr.body) > 0 {
 		_, _ = c.Writer.Write(upstreamErr.body)
 	}
+}
+
+func isClaudeNonRetryableUpstreamStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest,
+		http.StatusMethodNotAllowed,
+		http.StatusNotAcceptable,
+		http.StatusRequestEntityTooLarge,
+		http.StatusRequestURITooLong,
+		http.StatusTooManyRequests,
+		http.StatusUnsupportedMediaType,
+		http.StatusUnprocessableEntity,
+		http.StatusNotImplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeClaudeUpstreamErrorResponse(status int, headers http.Header, body []byte) (http.Header, []byte) {
+	normalizedHeaders := cloneHTTPHeader(headers)
+	normalizedHeaders.Set("Content-Type", "application/json")
+	normalizedHeaders.Del("Content-Length")
+	normalizedHeaders.Del("Content-Encoding")
+	normalizedHeaders.Del("Transfer-Encoding")
+
+	return normalizedHeaders, normalizeClaudeUpstreamErrorBody(status, body)
+}
+
+func normalizeClaudeUpstreamErrorBody(status int, body []byte) []byte {
+	if json.Valid(body) {
+		parsed := gjson.ParseBytes(body)
+		if parsed.Get("type").String() == "error" &&
+			parsed.Get("error.type").String() != "" &&
+			parsed.Get("error.message").String() != "" {
+			return body
+		}
+
+		message := firstNonEmpty(
+			parsed.Get("error.message").String(),
+			parsed.Get("message").String(),
+			parsed.Get("detail").String(),
+			strings.TrimSpace(string(body)),
+		)
+		errorType := firstNonEmpty(
+			parsed.Get("error.type").String(),
+			anthropicErrorTypeForHTTPStatus(status),
+		)
+		return mustMarshalAnthropicError(errorType, message)
+	}
+
+	message := strings.TrimSpace(string(body))
+	if message == "" {
+		message = http.StatusText(status)
+	}
+	return mustMarshalAnthropicError(anthropicErrorTypeForHTTPStatus(status), message)
+}
+
+func anthropicErrorTypeForHTTPStatus(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		if status >= http.StatusInternalServerError {
+			if status == 529 {
+				return "overloaded_error"
+			}
+			return "api_error"
+		}
+		return "invalid_request_error"
+	}
+}
+
+func mustMarshalAnthropicError(errorType string, message string) []byte {
+	if strings.TrimSpace(message) == "" {
+		message = "upstream error"
+	}
+	payload := map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    firstNonEmpty(errorType, "invalid_request_error"),
+			"message": message,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return []byte(`{"type":"error","error":{"type":"api_error","message":"upstream error"}}`)
+	}
+	return data
 }
 
 func cloneHTTPHeader(header http.Header) http.Header {

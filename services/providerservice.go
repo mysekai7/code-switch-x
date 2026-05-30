@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +20,12 @@ type Provider struct {
 	// ProviderType controls protocol adaptation. Missing values fall back to
 	// Icon for compatibility with older configs that used icon as the selector.
 	ProviderType string `json:"providerType,omitempty"`
-	Tint         string `json:"tint"`
-	Accent       string `json:"accent"`
-	Enabled      bool   `json:"enabled"`
+	// AuthMode controls upstream auth header injection for Claude providers.
+	// Empty/auto infers from APIURL; supported values: anthropic, bearer.
+	AuthMode string `json:"authMode,omitempty"`
+	Tint     string `json:"tint"`
+	Accent   string `json:"accent"`
+	Enabled  bool   `json:"enabled"`
 
 	// 模型白名单 - Provider 原生支持的模型名
 	// 使用 map 实现 O(1) 查找，向后兼容（omitempty）
@@ -50,6 +54,28 @@ func (p Provider) EffectiveProviderType() string {
 	default:
 		return "custom"
 	}
+}
+
+func (p Provider) ClaudeAuthMode() string {
+	mode := strings.TrimSpace(strings.ToLower(p.AuthMode))
+	switch mode {
+	case "anthropic", "x-api-key", "x_api_key", "api-key", "apikey":
+		return "anthropic"
+	case "bearer", "authorization", "auth-token", "auth_token", "claude-auth", "claude_auth":
+		return "bearer"
+	}
+	if isAnthropicOfficialAPIURL(p.APIURL) {
+		return "anthropic"
+	}
+	return "bearer"
+}
+
+func isAnthropicOfficialAPIURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.anthropic.com")
 }
 
 type providerEnvelope struct {

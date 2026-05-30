@@ -265,6 +265,93 @@ func TestProviderConfigValidation(t *testing.T) {
 
 // ==================== 代理兼容性测试 ====================
 
+func TestClaudeAuthModeInference(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider Provider
+		expected string
+	}{
+		{
+			name: "official Anthropic URL defaults to x-api-key auth",
+			provider: Provider{
+				APIURL: "https://api.anthropic.com",
+			},
+			expected: "anthropic",
+		},
+		{
+			name: "relay URL defaults to bearer auth",
+			provider: Provider{
+				APIURL: "https://relay.example.com",
+			},
+			expected: "bearer",
+		},
+		{
+			name:     "explicit bearer overrides Anthropic URL",
+			provider: providerFromJSON(t, `{"apiUrl":"https://api.anthropic.com","authMode":"bearer"}`),
+			expected: "bearer",
+		},
+		{
+			name:     "explicit anthropic overrides relay URL",
+			provider: providerFromJSON(t, `{"apiUrl":"https://relay.example.com","authMode":"anthropic"}`),
+			expected: "anthropic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.provider.ClaudeAuthMode(); got != tt.expected {
+				t.Fatalf("ClaudeAuthMode() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestProxyHandlerUsesExplicitClaudeAnthropicAuthMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var upstreamXAPIKey string
+	var upstreamAuthorization string
+	var upstreamAnthropicVersion string
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamXAPIKey = r.Header.Get("X-Api-Key")
+		upstreamAuthorization = r.Header.Get("Authorization")
+		upstreamAnthropicVersion = r.Header.Get("Anthropic-Version")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer upstream.Close()
+
+	provider := providerFromJSON(t, `{
+		"id": 1,
+		"name": "Anthropic",
+		"apiUrl": "`+upstream.URL+`",
+		"apiKey": "provider-secret",
+		"authMode": "anthropic",
+		"enabled": true
+	}`)
+	router := setupRelayTestRouter(t, "claude", []Provider{provider})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer client-placeholder")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if upstreamXAPIKey != "provider-secret" {
+		t.Fatalf("upstream x-api-key = %q, want provider-secret", upstreamXAPIKey)
+	}
+	if upstreamAuthorization != "" {
+		t.Fatalf("upstream Authorization = %q, want empty", upstreamAuthorization)
+	}
+	if upstreamAnthropicVersion == "" {
+		t.Fatal("upstream Anthropic-Version is empty, want default version")
+	}
+}
+
 func TestProxyHandlerReturnsLastUpstreamError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -380,6 +467,108 @@ func TestRegisterRoutesSupportsOpenAIResponsesPath(t *testing.T) {
 	}
 	if got := gjson.Get(rec.Body.String(), "id").String(); got != "resp_test" {
 		t.Fatalf("id = %q, want %q, body=%s", got, "resp_test", rec.Body.String())
+	}
+}
+
+func TestRegisterRoutesSupportsClaudeAndCodexAliases(t *testing.T) {
+	tests := []struct {
+		name         string
+		kind         string
+		requestPath  string
+		upstreamPath string
+		body         string
+	}{
+		{
+			name:         "claude prefixed messages",
+			kind:         "claude",
+			requestPath:  "/claude/v1/messages",
+			upstreamPath: "/v1/messages",
+			body:         `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name:         "codex double v1 responses",
+			kind:         "codex",
+			requestPath:  "/v1/v1/responses",
+			upstreamPath: "/responses",
+			body:         `{"model":"gpt-5","input":"hi"}`,
+		},
+		{
+			name:         "codex prefixed responses",
+			kind:         "codex",
+			requestPath:  "/codex/v1/responses",
+			upstreamPath: "/responses",
+			body:         `{"model":"gpt-5","input":"hi"}`,
+		},
+		{
+			name:         "codex double v1 compact",
+			kind:         "codex",
+			requestPath:  "/v1/v1/responses/compact",
+			upstreamPath: "/responses/compact",
+			body:         `{"model":"gpt-5","input":"compact"}`,
+		},
+		{
+			name:         "codex prefixed compact",
+			kind:         "codex",
+			requestPath:  "/codex/v1/responses/compact",
+			upstreamPath: "/responses/compact",
+			body:         `{"model":"gpt-5","input":"compact"}`,
+		},
+		{
+			name:         "codex chat completions",
+			kind:         "codex",
+			requestPath:  "/chat/completions",
+			upstreamPath: "/chat/completions",
+			body:         `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name:         "codex v1 chat completions",
+			kind:         "codex",
+			requestPath:  "/v1/chat/completions",
+			upstreamPath: "/chat/completions",
+			body:         `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name:         "codex prefixed chat completions",
+			kind:         "codex",
+			requestPath:  "/codex/v1/chat/completions",
+			upstreamPath: "/chat/completions",
+			body:         `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+
+			var upstreamPath string
+			upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				upstreamPath = r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"ok","object":"response","type":"message","role":"assistant","content":[]}`))
+			}))
+			defer upstream.Close()
+
+			router := setupRelayTestRouter(t, tt.kind, []Provider{{
+				ID:      1,
+				Name:    "Provider",
+				APIURL:  upstream.URL,
+				APIKey:  "test-key",
+				Enabled: true,
+			}})
+
+			req := httptest.NewRequest(http.MethodPost, tt.requestPath, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			if upstreamPath != tt.upstreamPath {
+				t.Fatalf("upstream path = %q, want %q", upstreamPath, tt.upstreamPath)
+			}
+		})
 	}
 }
 
@@ -807,6 +996,16 @@ func setupRelayTestRouter(t *testing.T, kind string, providers []Provider, setti
 	router := gin.New()
 	relay.registerRoutes(router)
 	return router
+}
+
+func providerFromJSON(t *testing.T, payload string) Provider {
+	t.Helper()
+
+	var provider Provider
+	if err := json.Unmarshal([]byte(payload), &provider); err != nil {
+		t.Fatalf("unmarshal provider json: %v", err)
+	}
+	return provider
 }
 
 func newTCP4TestServer(t *testing.T, handler http.Handler) *httptest.Server {

@@ -155,10 +155,19 @@ func (prs *ProviderRelayService) Addr() string {
 
 func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
+	router.POST("/claude/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
 	router.POST("/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/v1/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/codex/v1/responses", prs.proxyHandler("codex", "/responses"))
 	router.POST("/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
 	router.POST("/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/v1/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/codex/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/v1/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/codex/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {
@@ -306,7 +315,7 @@ func (prs *ProviderRelayService) forwardRequest(
 	model string,
 ) (bool, error) {
 	headers := cloneMap(clientHeaders)
-	headers["Authorization"] = fmt.Sprintf("Bearer %s", provider.APIKey)
+	applyProviderAuthHeaders(kind, provider, headers)
 	if _, ok := headers["Accept"]; !ok {
 		headers["Accept"] = "application/json"
 	}
@@ -343,7 +352,7 @@ func (prs *ProviderRelayService) forwardRequest(
 		}
 	}()
 
-	if kind == "codex" && provider.EffectiveProviderType() == "deepseek" {
+	if kind == "codex" && provider.EffectiveProviderType() == "deepseek" && isCodexResponsesEndpoint(endpoint) {
 		return prs.forwardDeepSeekCodexRequest(c, provider, query, headers, bodyBytes, isStream, requestLog)
 	}
 
@@ -378,6 +387,48 @@ func (prs *ProviderRelayService) forwardRequest(
 		requestLog.RawLog.captureResponseBody(body)
 	}
 	return false, newUpstreamResponseError(status, resp.Header, body)
+}
+
+func isCodexResponsesEndpoint(endpoint string) bool {
+	return endpoint == "/responses" || endpoint == "/responses/compact"
+}
+
+func applyProviderAuthHeaders(kind string, provider Provider, headers map[string]string) {
+	if kind == "claude" && provider.ClaudeAuthMode() == "anthropic" {
+		deleteHeader(headers, "Authorization")
+		deleteHeader(headers, "Anthropic-Api-Key")
+		setHeader(headers, "X-Api-Key", provider.APIKey)
+		if !hasHeader(headers, "Anthropic-Version") {
+			setHeader(headers, "Anthropic-Version", "2023-06-01")
+		}
+		return
+	}
+
+	deleteHeader(headers, "X-Api-Key")
+	deleteHeader(headers, "Anthropic-Api-Key")
+	setHeader(headers, "Authorization", fmt.Sprintf("Bearer %s", provider.APIKey))
+}
+
+func hasHeader(headers map[string]string, key string) bool {
+	for existing := range headers {
+		if strings.EqualFold(existing, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func setHeader(headers map[string]string, key string, value string) {
+	deleteHeader(headers, key)
+	headers[key] = value
+}
+
+func deleteHeader(headers map[string]string, key string) {
+	for existing := range headers {
+		if strings.EqualFold(existing, key) {
+			delete(headers, existing)
+		}
+	}
 }
 
 func (prs *ProviderRelayService) newRawLogCapture(headers http.Header, body []byte) *rawLogCapture {

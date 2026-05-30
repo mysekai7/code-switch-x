@@ -532,7 +532,7 @@ func TestProviderLevelGrouping(t *testing.T) {
 			name: "默认 Level（未设置）",
 			providers: []Provider{
 				{ID: 1, Name: "Provider-A", Level: 0}, // 0 应默认为 1
-				{ID: 2, Name: "Provider-B"},            // 未设置应默认为 1
+				{ID: 2, Name: "Provider-B"},           // 未设置应默认为 1
 			},
 			expected: map[int][]string{
 				1: {"Provider-A", "Provider-B"},
@@ -736,4 +736,48 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestProviderEffectiveTypeFallsBackToLegacyIcon(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider Provider
+		want     string
+	}{
+		{
+			name:     "defaults to custom when provider type and icon are empty",
+			provider: Provider{},
+			want:     "custom",
+		},
+		{
+			name: "uses provider type when present",
+			provider: Provider{
+				ProviderType: "DeepSeek",
+				Icon:         "custom",
+			},
+			want: "deepseek",
+		},
+		{
+			name: "falls back to legacy icon",
+			provider: Provider{
+				Icon: "deepseek",
+			},
+			want: "deepseek",
+		},
+		{
+			name: "treats unknown legacy icon as custom protocol",
+			provider: Provider{
+				Icon: "kimi",
+			},
+			want: "custom",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.provider.EffectiveProviderType(); got != tt.want {
+				t.Fatalf("EffectiveProviderType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

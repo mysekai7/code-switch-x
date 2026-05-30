@@ -293,7 +293,6 @@ func (prs *ProviderRelayService) forwardRequest(
 	isStream bool,
 	model string,
 ) (bool, error) {
-	targetURL := joinURL(provider.APIURL, endpoint)
 	headers := cloneMap(clientHeaders)
 	headers["Authorization"] = fmt.Sprintf("Bearer %s", provider.APIKey)
 	if _, ok := headers["Accept"]; !ok {
@@ -326,6 +325,11 @@ func (prs *ProviderRelayService) forwardRequest(
 		}
 	}()
 
+	if kind == "codex" && provider.EffectiveProviderType() == "deepseek" {
+		return prs.forwardDeepSeekCodexRequest(c, provider, query, headers, bodyBytes, isStream, requestLog)
+	}
+
+	targetURL := joinURL(provider.APIURL, endpoint)
 	req := xrequest.New().
 		SetHeaders(headers).
 		SetQueryParams(query)

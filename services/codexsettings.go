@@ -17,7 +17,6 @@ const (
 	codexAuthFileName     = "auth.json"
 	codexBackupAuthName   = "cc-studio.back.auth.json"
 	codexPreferredAuth    = "apikey"
-	codexAuthModeKey      = "auth_mode"
 	codexDefaultModel     = "gpt-5-codex"
 	codexProviderKey      = "code-switch"
 	codexEnvKey           = "OPENAI_API_KEY"
@@ -83,7 +82,9 @@ func (css *CodexSettingsService) EnableProxy() error {
 	if raw == nil {
 		raw = make(map[string]any)
 	}
-	delete(raw, "preferred_auth_method")
+	if _, ok := raw["preferred_auth_method"]; !ok {
+		raw["preferred_auth_method"] = codexPreferredAuth
+	}
 	raw["model"] = codexDefaultModel
 	raw["model_provider"] = codexProviderKey
 
@@ -261,7 +262,6 @@ func (css *CodexSettingsService) writeAuthFile() error {
 			}
 		}
 	}
-	payload[codexAuthModeKey] = codexPreferredAuth
 	payload[codexEnvKey] = codexTokenValue
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

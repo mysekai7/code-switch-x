@@ -107,8 +107,17 @@
           "apiKey": "API key",
           "officialSite": "Official site",
           "icon": "Icon",
+          "providerType": "API compatibility mode",
           "enabled": "Enabled",
           "level": "Priority Level"
+        },
+        "providerTypes": {
+          "custom": "Pass through",
+          "deepseek": "DeepSeek"
+        },
+        "providerTypeDescriptions": {
+          "custom": "Use when the provider already matches the current platform API",
+          "deepseek": "Automatically adapts DeepSeek Chat Completions for Codex"
         },
         "placeholders": {
           "name": "e.g. AICoding.sh",
@@ -118,6 +127,7 @@
           "icon": "e.g. aicoding, kimi"
         },
         "hints": {
+          "providerType": "Controls API protocol conversion. Pass through leaves requests unchanged; DeepSeek adapts to the current AI client.",
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc."
         },
         "actions": {

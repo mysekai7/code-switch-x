@@ -10,15 +10,18 @@ import (
 )
 
 type Provider struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	APIURL  string `json:"apiUrl"`
-	APIKey  string `json:"apiKey"`
-	Site    string `json:"officialSite"`
-	Icon    string `json:"icon"`
-	Tint    string `json:"tint"`
-	Accent  string `json:"accent"`
-	Enabled bool   `json:"enabled"`
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	APIURL string `json:"apiUrl"`
+	APIKey string `json:"apiKey"`
+	Site   string `json:"officialSite"`
+	Icon   string `json:"icon"`
+	// ProviderType controls protocol adaptation. Missing values fall back to
+	// Icon for compatibility with older configs that used icon as the selector.
+	ProviderType string `json:"providerType,omitempty"`
+	Tint         string `json:"tint"`
+	Accent       string `json:"accent"`
+	Enabled      bool   `json:"enabled"`
 
 	// 模型白名单 - Provider 原生支持的模型名
 	// 使用 map 实现 O(1) 查找，向后兼容（omitempty）
@@ -34,6 +37,19 @@ type Provider struct {
 
 	// 内部字段：配置验证错误（不持久化）
 	configErrors []string `json:"-"`
+}
+
+func (p Provider) EffectiveProviderType() string {
+	providerType := strings.TrimSpace(strings.ToLower(p.ProviderType))
+	if providerType == "" {
+		providerType = strings.TrimSpace(strings.ToLower(p.Icon))
+	}
+	switch providerType {
+	case "deepseek":
+		return "deepseek"
+	default:
+		return "custom"
+	}
 }
 
 type providerEnvelope struct {

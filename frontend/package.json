@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test src/data/providerTypes.test.mjs",
     "build:dev": "vue-tsc && vite build --minify false --mode development",
     "build": "vue-tsc && vite build --mode production",
     "preview": "vite preview"

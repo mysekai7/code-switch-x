@@ -1,3 +1,5 @@
+import { normalizeProviderType } from './providerTypes'
+
 export type AutomationCard = {
   id: number
   name: string
@@ -5,6 +7,7 @@ export type AutomationCard = {
   apiKey: string
   officialSite: string
   icon: string
+  providerType?: string
   tint: string
   accent: string
   enabled: boolean
@@ -80,5 +83,6 @@ export function createAutomationCards(data: AutomationCard[] = []): AutomationCa
   return data.map((item) => ({
     ...item,
     officialSite: item.officialSite ?? '',
+    providerType: normalizeProviderType(item.providerType || item.icon),
   }))
 }

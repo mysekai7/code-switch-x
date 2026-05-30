@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestClaudeEnableProxyMergesExistingSettings(t *testing.T) {
@@ -90,8 +92,8 @@ func TestCodexEnableProxyPreservesAuthFields(t *testing.T) {
 	if got := payload["OPENAI_API_KEY"]; got != codexTokenValue {
 		t.Fatalf("OPENAI_API_KEY = %q, want %q", got, codexTokenValue)
 	}
-	if got := payload["auth_mode"]; got != "apikey" {
-		t.Fatalf("auth_mode = %q, want apikey", got)
+	if got := payload["auth_mode"]; got != "chatgpt" {
+		t.Fatalf("auth_mode = %q, want chatgpt", got)
 	}
 	if got := payload["OTHER_TOKEN"]; got != "keep" {
 		t.Fatalf("OTHER_TOKEN = %q, want keep", got)
@@ -101,7 +103,33 @@ func TestCodexEnableProxyPreservesAuthFields(t *testing.T) {
 	}
 }
 
-func TestCodexEnableProxyStripsPreferredAuthMethod(t *testing.T) {
+func TestCodexEnableProxyDoesNotAddAuthMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	initialAuth := `{"OPENAI_API_KEY":"real-key","OTHER_TOKEN":"keep"}`
+	writeFile(t, authPath, initialAuth)
+
+	service := NewCodexSettingsService(":18100")
+	if err := service.EnableProxy(); err != nil {
+		t.Fatalf("EnableProxy: %v", err)
+	}
+
+	var payload map[string]any
+	readJSONFile(t, authPath, &payload)
+	if _, ok := payload["auth_mode"]; ok {
+		t.Fatalf("auth_mode should not be added: %#v", payload)
+	}
+	if got := payload["OPENAI_API_KEY"]; got != codexTokenValue {
+		t.Fatalf("OPENAI_API_KEY = %q, want %q", got, codexTokenValue)
+	}
+	if got := payload["OTHER_TOKEN"]; got != "keep" {
+		t.Fatalf("OTHER_TOKEN = %q, want keep", got)
+	}
+}
+
+func TestCodexEnableProxyPreservesPreferredAuthMethod(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -117,9 +145,30 @@ model = "custom-model"
 		t.Fatalf("EnableProxy: %v", err)
 	}
 
-	content := string(readFile(t, configPath))
-	if strings.Contains(content, "preferred_auth_method") {
-		t.Fatalf("preferred_auth_method should be stripped from written config:\n%s", content)
+	payload := readTOMLMap(t, configPath)
+	if got := payload["preferred_auth_method"]; got != "chatgpt" {
+		t.Fatalf("preferred_auth_method = %q, want chatgpt", got)
+	}
+}
+
+func TestCodexEnableProxySetsPreferredAuthMethodWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	initialConfig := strings.TrimSpace(`
+model = "custom-model"
+`) + "\n"
+	writeFile(t, configPath, initialConfig)
+
+	service := NewCodexSettingsService(":18100")
+	if err := service.EnableProxy(); err != nil {
+		t.Fatalf("EnableProxy: %v", err)
+	}
+
+	payload := readTOMLMap(t, configPath)
+	if got := payload["preferred_auth_method"]; got != codexPreferredAuth {
+		t.Fatalf("preferred_auth_method = %q, want %q", got, codexPreferredAuth)
 	}
 }
 
@@ -205,6 +254,15 @@ func readJSONFile(t *testing.T, path string, target any) {
 	if err := json.Unmarshal(readFile(t, path), target); err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
 	}
+}
+
+func readTOMLMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	var payload map[string]any
+	if err := toml.Unmarshal(readFile(t, path), &payload); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+	return payload
 }
 
 func assertJSONEqual(t *testing.T, got []byte, want []byte) {

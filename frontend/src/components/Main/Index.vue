@@ -379,31 +379,35 @@
                 </label>
 
                 <div class="form-field">
-                  <span>{{ t('components.main.form.labels.icon') }}</span>
-                  <Listbox v-model="modalState.form.icon" v-slot="{ open }">
+                  <span>{{ t('components.main.form.labels.providerType') }}</span>
+                  <Listbox v-model="modalState.form.providerType" v-slot="{ open }">
                     <div class="icon-select">
                       <ListboxButton class="icon-select-button">
-                        <span class="icon-preview" v-html="iconSvg(modalState.form.icon)" aria-hidden="true"></span>
-                        <span class="icon-select-label">{{ modalState.form.icon }}</span>
+                        <span class="icon-preview" v-html="iconSvg(modalState.form.providerType)" aria-hidden="true"></span>
+                        <span class="icon-select-label">{{ providerTypeLabel(modalState.form.providerType) }}</span>
                         <svg viewBox="0 0 20 20" aria-hidden="true">
                           <path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
                         </svg>
                       </ListboxButton>
                       <ListboxOptions v-if="open" class="icon-select-options">
                         <ListboxOption
-                          v-for="iconName in iconOptions"
-                          :key="iconName"
-                          :value="iconName"
+                          v-for="option in providerTypeOptions"
+                          :key="option.value"
+                          :value="option.value"
                           v-slot="{ active, selected }"
                         >
                           <div :class="['icon-option', { active, selected }]">
-                            <span class="icon-preview" v-html="iconSvg(iconName)" aria-hidden="true"></span>
-                            <span class="icon-name">{{ iconName }}</span>
+                            <span class="icon-preview" v-html="iconSvg(option.value)" aria-hidden="true"></span>
+                            <span class="icon-option-copy">
+                              <span class="icon-name">{{ t(option.labelKey) }}</span>
+                              <span class="icon-desc">{{ t(option.descriptionKey) }}</span>
+                            </span>
                           </div>
                         </ListboxOption>
                       </ListboxOptions>
                     </div>
                   </Listbox>
+                  <p class="field-hint">{{ t('components.main.form.hints.providerType') }}</p>
                 </div>
 
                 <div class="form-field">
@@ -478,6 +482,7 @@ import {
 	type UsageHeatmapDay,
 } from '../../data/usageHeatmap'
 import { automationCardGroups, createAutomationCards, type AutomationCard } from '../../data/cards'
+import { defaultProviderType, normalizeProviderType, providerTypeOptions } from '../../data/providerTypes'
 import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
@@ -1031,20 +1036,19 @@ type VendorForm = {
   apiKey: string
   officialSite: string
   icon: string
+  providerType: string
   enabled: boolean
   supportedModels?: Record<string, boolean>
   modelMapping?: Record<string, string>
 }
-
-const iconOptions = Object.keys(lobeIcons).sort((a, b) => a.localeCompare(b))
-const defaultIconKey = iconOptions[0] ?? 'aicoding'
 
 const defaultFormValues = (): VendorForm => ({
   name: '',
   apiUrl: '',
   apiKey: '',
   officialSite: '',
-  icon: defaultIconKey,
+  icon: defaultProviderType,
+  providerType: defaultProviderType,
   enabled: true,
   supportedModels: {},
   modelMapping: {},
@@ -1082,6 +1086,7 @@ const openEditModal = (card: AutomationCard) => {
     apiKey: card.apiKey,
     officialSite: card.officialSite,
     icon: card.icon,
+    providerType: normalizeProviderType(card.providerType || card.icon),
     enabled: card.enabled,
     supportedModels: card.supportedModels || {},
     modelMapping: card.modelMapping || {},
@@ -1106,7 +1111,8 @@ const submitModal = () => {
   const apiUrl = modalState.form.apiUrl.trim()
   const apiKey = modalState.form.apiKey.trim()
   const officialSite = modalState.form.officialSite.trim()
-  const icon = (modalState.form.icon || defaultIconKey).toString().trim().toLowerCase() || defaultIconKey
+  const providerType = normalizeProviderType(modalState.form.providerType)
+  const icon = editingCard.value?.icon || providerType
   modalState.errors.apiUrl = ''
   try {
     const parsed = new URL(apiUrl)
@@ -1122,6 +1128,7 @@ const submitModal = () => {
       apiKey,
       officialSite,
       icon,
+      providerType,
       enabled: modalState.form.enabled,
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
@@ -1135,6 +1142,7 @@ const submitModal = () => {
       apiKey,
       officialSite,
       icon,
+      providerType,
       accent: '#0a84ff',
       tint: 'rgba(15, 23, 42, 0.12)',
       enabled: modalState.form.enabled,
@@ -1200,6 +1208,12 @@ const onDragEnd = () => {
 const iconSvg = (name: string) => {
   if (!name) return ''
   return lobeIcons[name.toLowerCase()] ?? ''
+}
+
+const providerTypeLabel = (value: string) => {
+  const normalized = normalizeProviderType(value)
+  const option = providerTypeOptions.find((item) => item.value === normalized)
+  return option ? t(option.labelKey) : value
 }
 
 const vendorInitials = (name: string) => {

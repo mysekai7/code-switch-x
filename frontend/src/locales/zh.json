@@ -108,8 +108,17 @@
           "apiKey": "API 密钥",
           "officialSite": "官网地址",
           "icon": "图标",
+          "providerType": "接口兼容模式",
           "enabled": "启用状态",
           "level": "优先级分组"
+        },
+        "providerTypes": {
+          "custom": "原样转发",
+          "deepseek": "DeepSeek"
+        },
+        "providerTypeDescriptions": {
+          "custom": "供应商已兼容当前平台协议时使用",
+          "deepseek": "Codex 下自动转换 DeepSeek Chat Completions"
         },
         "placeholders": {
           "name": "例如：AICoding.sh",
@@ -119,6 +128,7 @@
           "icon": "例如：aicoding、kimi"
         },
         "hints": {
+          "providerType": "决定是否启用 API 协议转换。原样转发不会修改请求；DeepSeek 会按当前 AI 类型自动适配。",
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等"
         },
         "actions": {

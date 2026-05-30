@@ -1275,6 +1275,13 @@ html.dark .ghost-icon:hover {
   font-size: 0.8rem;
 }
 
+.field-hint {
+  margin: 2px 0 0;
+  color: var(--mac-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .has-error {
   border-color: rgba(255, 59, 48, 0.8);
 }
@@ -1454,9 +1461,22 @@ html.dark .btn-ghost:focus-visible {
   transition: background 0.15s ease;
 }
 
+.icon-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .icon-option .icon-name {
   font-size: 0.85rem;
   color: var(--mac-text-secondary);
+}
+
+.icon-option .icon-desc {
+  color: color-mix(in srgb, var(--mac-text-secondary) 82%, transparent);
+  font-size: 0.74rem;
+  line-height: 1.35;
 }
 .icon-select .icon-preview,
 .icon-option .icon-preview {

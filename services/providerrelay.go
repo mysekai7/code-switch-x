@@ -15,7 +15,6 @@ import (
 
 	"github.com/daodao97/xgo/xdb"
 	"github.com/daodao97/xgo/xlog"
-	"github.com/daodao97/xgo/xrequest"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -23,14 +22,20 @@ import (
 )
 
 type ProviderRelayService struct {
-	providerService *ProviderService
-	server          *http.Server
-	addr            string
+	providerService    *ProviderService
+	appSettingsService *AppSettingsService
+	codexChatHistory   *codexChatHistoryStore
+	server             *http.Server
+	addr               string
 }
 
-func NewProviderRelayService(providerService *ProviderService, addr string) *ProviderRelayService {
+func NewProviderRelayService(providerService *ProviderService, addr string, appSettingsServices ...*AppSettingsService) *ProviderRelayService {
 	if addr == "" {
-		addr = ":18100"
+		addr = fmt.Sprintf(":%d", defaultRelayPort)
+	}
+	var appSettingsService *AppSettingsService
+	if len(appSettingsServices) > 0 {
+		appSettingsService = appSettingsServices[0]
 	}
 
 	home, _ := os.UserHomeDir()
@@ -52,11 +57,15 @@ func NewProviderRelayService(providerService *ProviderService, addr string) *Pro
 		fmt.Printf("初始化数据库失败: %v\n", err)
 	} else if err := ensureRequestLogTable(); err != nil {
 		fmt.Printf("初始化 request_log 表失败: %v\n", err)
+	} else if err := ensureRequestLogPayloadTable(); err != nil {
+		fmt.Printf("初始化 request_log_payload 表失败: %v\n", err)
 	}
 
 	return &ProviderRelayService{
-		providerService: providerService,
-		addr:            addr,
+		providerService:    providerService,
+		appSettingsService: appSettingsService,
+		codexChatHistory:   newCodexChatHistoryStore(),
+		addr:               addr,
 	}
 }
 
@@ -114,13 +123,6 @@ func (prs *ProviderRelayService) validateConfig() []string {
 				}
 			}
 
-			// 检查是否配置了模型白名单或映射
-			if (p.SupportedModels == nil || len(p.SupportedModels) == 0) &&
-				(p.ModelMapping == nil || len(p.ModelMapping) == 0) {
-				warnings = append(warnings, fmt.Sprintf(
-					"[%s/%s] 未配置 supportedModels 或 modelMapping，将假设支持所有模型（可能导致降级失败）",
-					kind, p.Name))
-			}
 		}
 
 		if enabledCount == 0 {
@@ -146,8 +148,19 @@ func (prs *ProviderRelayService) Addr() string {
 
 func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
+	router.POST("/claude/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/responses", prs.proxyHandler("codex", "/responses"))
 	router.POST("/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/v1/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/codex/v1/responses", prs.proxyHandler("codex", "/responses"))
+	router.POST("/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/v1/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/codex/v1/responses/compact", prs.proxyHandler("codex", "/responses/compact"))
+	router.POST("/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/v1/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
+	router.POST("/codex/v1/chat/completions", prs.proxyHandler("codex", "/chat/completions"))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {
@@ -247,7 +260,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				i+1, len(active), provider.Name, effectiveModel)
 
 			startTime := time.Now()
-			ok, err := prs.forwardRequest(c, kind, provider, endpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+			ok, err := prs.forwardRequest(c, kind, provider, endpoint, query, clientHeaders, currentBodyBytes, bodyBytes, isStream, effectiveModel)
 			duration := time.Since(startTime)
 
 			if ok {
@@ -290,11 +303,12 @@ func (prs *ProviderRelayService) forwardRequest(
 	query map[string]string,
 	clientHeaders map[string]string,
 	bodyBytes []byte,
+	rawRequestBody []byte,
 	isStream bool,
 	model string,
 ) (bool, error) {
 	headers := cloneMap(clientHeaders)
-	headers["Authorization"] = fmt.Sprintf("Bearer %s", provider.APIKey)
+	applyProviderAuthHeaders(kind, provider, headers)
 	if _, ok := headers["Accept"]; !ok {
 		headers["Accept"] = "application/json"
 	}
@@ -304,11 +318,12 @@ func (prs *ProviderRelayService) forwardRequest(
 		Provider: provider.Name,
 		Model:    model,
 		IsStream: isStream,
+		RawLog:   prs.newRawLogCapture(c.Request.Header, rawRequestBody),
 	}
 	start := time.Now()
 	defer func() {
 		requestLog.DurationSec = time.Since(start).Seconds()
-		if _, err := xdb.New("request_log").Insert(xdb.Record{
+		logID, err := xdb.New("request_log").Insert(xdb.Record{
 			"platform":            requestLog.Platform,
 			"model":               requestLog.Model,
 			"provider":            requestLog.Provider,
@@ -320,24 +335,22 @@ func (prs *ProviderRelayService) forwardRequest(
 			"reasoning_tokens":    requestLog.ReasoningTokens,
 			"is_stream":           boolToInt(requestLog.IsStream),
 			"duration_sec":        requestLog.DurationSec,
-		}); err != nil {
+		})
+		if err != nil {
 			fmt.Printf("写入 request_log 失败: %v\n", err)
+			return
+		}
+		if err := requestLog.RawLog.insert(logID); err != nil {
+			fmt.Printf("写入 request_log_payload 失败: %v\n", err)
 		}
 	}()
 
-	if kind == "codex" && provider.EffectiveProviderType() == "deepseek" {
+	if kind == "codex" && provider.EffectiveProviderType() == "deepseek" && isCodexResponsesEndpoint(endpoint) {
 		return prs.forwardDeepSeekCodexRequest(c, provider, query, headers, bodyBytes, isStream, requestLog)
 	}
 
 	targetURL := joinURL(provider.APIURL, endpoint)
-	req := xrequest.New().
-		SetHeaders(headers).
-		SetQueryParams(query)
-
-	reqBody := bytes.NewReader(bodyBytes)
-	req = req.SetBody(reqBody)
-
-	resp, err := req.Post(targetURL)
+	resp, err := postUpstream(targetURL, query, headers, bodyBytes)
 	if err != nil {
 		return false, err
 	}
@@ -346,16 +359,169 @@ func (prs *ProviderRelayService) forwardRequest(
 		return false, fmt.Errorf("empty response")
 	}
 
-	status := resp.StatusCode()
+	status := resp.StatusCode
 	requestLog.HttpCode = status
 
 	if status >= http.StatusOK && status < http.StatusMultipleChoices {
-		_, copyErr := resp.ToHttpResponseWriter(c.Writer, ReqeustLogHook(c, kind, requestLog))
+		hooks := []func([]byte) (bool, []byte){}
+		if requestLog.RawLog != nil {
+			requestLog.RawLog.captureResponseHeaders(resp.Header)
+			hooks = append(hooks, requestLog.RawLog.responseHook())
+		}
+		hooks = append(hooks, ReqeustLogHook(c, kind, requestLog))
+		_, copyErr := writeUpstreamResponse(c.Writer, resp, hooks...)
 		return copyErr == nil, copyErr
 	}
 
-	body := resp.Bytes()
-	return false, newUpstreamResponseError(status, resp.Headers(), body)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if retryResp, retried, err := prs.retryClaudeThinkingRectifiedRequest(kind, targetURL, query, headers, bodyBytes, body, requestLog); err != nil {
+		return false, err
+	} else if retried {
+		if retryResp == nil {
+			return false, fmt.Errorf("empty response")
+		}
+		defer retryResp.Body.Close()
+		requestLog.HttpCode = retryResp.StatusCode
+		if retryResp.StatusCode >= http.StatusOK && retryResp.StatusCode < http.StatusMultipleChoices {
+			hooks := []func([]byte) (bool, []byte){}
+			if requestLog.RawLog != nil {
+				requestLog.RawLog.captureResponseHeaders(retryResp.Header)
+				hooks = append(hooks, requestLog.RawLog.responseHook())
+			}
+			hooks = append(hooks, ReqeustLogHook(c, kind, requestLog))
+			_, copyErr := writeUpstreamResponse(c.Writer, retryResp, hooks...)
+			return copyErr == nil, copyErr
+		}
+		retryBody, _ := io.ReadAll(retryResp.Body)
+		if requestLog.RawLog != nil {
+			requestLog.RawLog.captureResponseHeaders(retryResp.Header)
+			requestLog.RawLog.captureResponseBody(retryBody)
+		}
+		return false, newUpstreamResponseError(retryResp.StatusCode, retryResp.Header, retryBody)
+	}
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureResponseHeaders(resp.Header)
+		requestLog.RawLog.captureResponseBody(body)
+	}
+	return false, newUpstreamResponseError(status, resp.Header, body)
+}
+
+func (prs *ProviderRelayService) retryClaudeThinkingRectifiedRequest(
+	kind string,
+	targetURL string,
+	query map[string]string,
+	headers map[string]string,
+	bodyBytes []byte,
+	errorBody []byte,
+	requestLog *ReqeustLog,
+) (*http.Response, bool, error) {
+	if kind != "claude" || !prs.claudeThinkingRectifierEnabled() {
+		return nil, false, nil
+	}
+
+	if shouldRectifyClaudeThinkingSignature(errorBody) {
+		rectified, applied, err := rectifyClaudeThinkingSignatureRequest(bodyBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		if applied {
+			return postClaudeThinkingRectifiedRequest(targetURL, query, headers, rectified, requestLog)
+		}
+	}
+
+	if shouldRectifyClaudeThinkingBudget(errorBody) {
+		rectified, applied, err := rectifyClaudeThinkingBudgetRequest(bodyBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		if applied {
+			return postClaudeThinkingRectifiedRequest(targetURL, query, headers, rectified, requestLog)
+		}
+	}
+
+	return nil, false, nil
+}
+
+func postClaudeThinkingRectifiedRequest(
+	targetURL string,
+	query map[string]string,
+	headers map[string]string,
+	rectified []byte,
+	requestLog *ReqeustLog,
+) (*http.Response, bool, error) {
+	if requestLog.RawLog != nil {
+		requestLog.RawLog.captureUpstreamRequestBody(rectified)
+	}
+	retryResp, err := postUpstream(targetURL, query, headers, rectified)
+	if err != nil {
+		return nil, true, err
+	}
+	return retryResp, true, nil
+}
+
+func (prs *ProviderRelayService) claudeThinkingRectifierEnabled() bool {
+	if prs.appSettingsService == nil {
+		return true
+	}
+	settings, err := prs.appSettingsService.GetAppSettings()
+	if err != nil {
+		return true
+	}
+	return settings.ClaudeThinkingRectifier
+}
+
+func isCodexResponsesEndpoint(endpoint string) bool {
+	return endpoint == "/responses" || endpoint == "/responses/compact"
+}
+
+func applyProviderAuthHeaders(kind string, provider Provider, headers map[string]string) {
+	if kind == "claude" && provider.ClaudeAuthMode() == "anthropic" {
+		deleteHeader(headers, "Authorization")
+		deleteHeader(headers, "Anthropic-Api-Key")
+		setHeader(headers, "X-Api-Key", provider.APIKey)
+		if !hasHeader(headers, "Anthropic-Version") {
+			setHeader(headers, "Anthropic-Version", "2023-06-01")
+		}
+		return
+	}
+
+	deleteHeader(headers, "X-Api-Key")
+	deleteHeader(headers, "Anthropic-Api-Key")
+	setHeader(headers, "Authorization", fmt.Sprintf("Bearer %s", provider.APIKey))
+}
+
+func hasHeader(headers map[string]string, key string) bool {
+	for existing := range headers {
+		if strings.EqualFold(existing, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func setHeader(headers map[string]string, key string, value string) {
+	deleteHeader(headers, key)
+	headers[key] = value
+}
+
+func deleteHeader(headers map[string]string, key string) {
+	for existing := range headers {
+		if strings.EqualFold(existing, key) {
+			delete(headers, existing)
+		}
+	}
+}
+
+func (prs *ProviderRelayService) newRawLogCapture(headers http.Header, body []byte) *rawLogCapture {
+	if prs.appSettingsService == nil {
+		return nil
+	}
+	settings, err := prs.appSettingsService.GetAppSettings()
+	if err != nil {
+		return nil
+	}
+	return newRawLogCapture(settings, headers, body)
 }
 
 func cloneHeaders(header http.Header) map[string]string {
@@ -506,6 +672,31 @@ func ensureRequestLogTableWithDB(db *sql.DB) error {
 	return nil
 }
 
+func ensureRequestLogPayloadTable() error {
+	db, err := xdb.DB("default")
+	if err != nil {
+		return err
+	}
+	return ensureRequestLogPayloadTableWithDB(db)
+}
+
+func ensureRequestLogPayloadTableWithDB(db *sql.DB) error {
+	const createTableSQL = `CREATE TABLE IF NOT EXISTS request_log_payload (
+		log_id INTEGER PRIMARY KEY,
+		request_headers TEXT,
+		request_body TEXT,
+		response_headers TEXT,
+		response_body TEXT,
+		upstream_request_body TEXT,
+		upstream_response_body TEXT,
+		request_truncated INTEGER DEFAULT 0,
+		response_truncated INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`
+	_, err := db.Exec(createTableSQL)
+	return err
+}
+
 func ReqeustLogHook(c *gin.Context, kind string, usage *ReqeustLog) func(data []byte) (bool, []byte) { // SSE 钩子：累计字节和解析 token 用量
 	return func(data []byte) (bool, []byte) {
 		payload := strings.TrimSpace(string(data))
@@ -531,27 +722,28 @@ func parseEventPayload(payload string, parser func(string, *ReqeustLog), usage *
 }
 
 type ReqeustLog struct {
-	ID                int64   `json:"id"`
-	Platform          string  `json:"platform"` // claude code or codex
-	Model             string  `json:"model"`
-	Provider          string  `json:"provider"` // provider name
-	HttpCode          int     `json:"http_code"`
-	InputTokens       int     `json:"input_tokens"`
-	OutputTokens      int     `json:"output_tokens"`
-	CacheCreateTokens int     `json:"cache_create_tokens"`
-	CacheReadTokens   int     `json:"cache_read_tokens"`
-	ReasoningTokens   int     `json:"reasoning_tokens"`
-	IsStream          bool    `json:"is_stream"`
-	DurationSec       float64 `json:"duration_sec"`
-	CreatedAt         string  `json:"created_at"`
-	InputCost         float64 `json:"input_cost"`
-	OutputCost        float64 `json:"output_cost"`
-	CacheCreateCost   float64 `json:"cache_create_cost"`
-	CacheReadCost     float64 `json:"cache_read_cost"`
-	Ephemeral5mCost   float64 `json:"ephemeral_5m_cost"`
-	Ephemeral1hCost   float64 `json:"ephemeral_1h_cost"`
-	TotalCost         float64 `json:"total_cost"`
-	HasPricing        bool    `json:"has_pricing"`
+	ID                int64          `json:"id"`
+	Platform          string         `json:"platform"` // claude code or codex
+	Model             string         `json:"model"`
+	Provider          string         `json:"provider"` // provider name
+	HttpCode          int            `json:"http_code"`
+	InputTokens       int            `json:"input_tokens"`
+	OutputTokens      int            `json:"output_tokens"`
+	CacheCreateTokens int            `json:"cache_create_tokens"`
+	CacheReadTokens   int            `json:"cache_read_tokens"`
+	ReasoningTokens   int            `json:"reasoning_tokens"`
+	IsStream          bool           `json:"is_stream"`
+	DurationSec       float64        `json:"duration_sec"`
+	CreatedAt         string         `json:"created_at"`
+	RawLog            *rawLogCapture `json:"-"`
+	InputCost         float64        `json:"input_cost"`
+	OutputCost        float64        `json:"output_cost"`
+	CacheCreateCost   float64        `json:"cache_create_cost"`
+	CacheReadCost     float64        `json:"cache_read_cost"`
+	Ephemeral5mCost   float64        `json:"ephemeral_5m_cost"`
+	Ephemeral1hCost   float64        `json:"ephemeral_1h_cost"`
+	TotalCost         float64        `json:"total_cost"`
+	HasPricing        bool           `json:"has_pricing"`
 }
 
 // claude code usage parser

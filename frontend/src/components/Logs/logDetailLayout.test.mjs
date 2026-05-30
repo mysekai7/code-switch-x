@@ -1,0 +1,68 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+
+const readLogsComponent = () => readFile(new URL('./Index.vue', import.meta.url), 'utf8')
+const readGlobalStyle = () => readFile(new URL('../../style.css', import.meta.url), 'utf8')
+
+const cssRule = (style, selector) => {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = style.match(new RegExp(`${escapedSelector}\\s*{([\\s\\S]*?)\\n}`))
+  assert.ok(match, `missing CSS rule: ${selector}`)
+  return match[1]
+}
+
+test('raw log details use a fullscreen modal layout', async () => {
+  const [component, style] = await Promise.all([readLogsComponent(), readGlobalStyle()])
+  const modalRule = cssRule(style, '.raw-log-modal')
+  const backdropRule = cssRule(style, '.raw-log-backdrop')
+  const contentRule = cssRule(style, '.raw-log-content')
+  const tabsButtonRule = cssRule(style, '.raw-log-tabs button')
+  const bodyRule = cssRule(style, '.raw-log-body')
+  const bodyScrollbarRule = cssRule(style, '.raw-log-body::-webkit-scrollbar')
+  const pageScrollLockRule = cssRule(style, 'body.raw-log-scroll-lock')
+  const selectableContentRule = cssRule(style, '.raw-log-content *')
+  const preRule = cssRule(style, '.raw-log-block pre')
+
+  assert.match(component, /class="raw-log-modal"/)
+  assert.doesNotMatch(component, /class="raw-log-drawer"/)
+  assert.match(component, /class="raw-log-body"/)
+  assert.match(component, /raw-log-scroll-lock/)
+  assert.match(component, /document\.body\.classList\.toggle/)
+  assert.match(component, /document\.body\.classList\.remove/)
+
+  assert.match(backdropRule, /padding:\s*0/)
+  assert.match(backdropRule, /overscroll-behavior:\s*none/)
+  assert.match(modalRule, /width:\s*100vw/)
+  assert.match(modalRule, /\n\s*height:\s*100vh/)
+  assert.match(modalRule, /max-height:\s*100vh/)
+  assert.match(modalRule, /grid-template-rows:\s*auto auto 1fr/)
+  assert.match(modalRule, /overflow:\s*hidden/)
+  assert.match(modalRule, /border-radius:\s*0/)
+  assert.match(style, /:root\s*{[\s\S]*--raw-log-backdrop-bg:\s*#[0-9a-fA-F]{6}/)
+  assert.match(style, /html\.dark\s*{[\s\S]*--raw-log-backdrop-bg:\s*#[0-9a-fA-F]{6}/)
+  assert.match(backdropRule, /background:\s*var\(--raw-log-backdrop-bg\)/)
+  assert.match(modalRule, /background:\s*var\(--raw-log-modal-bg\)/)
+  assert.match(contentRule, /grid-template-columns:\s*1fr/)
+  assert.match(selectableContentRule, /user-select:\s*text/)
+  assert.match(selectableContentRule, /-webkit-user-select:\s*text/)
+  assert.match(selectableContentRule, /-moz-user-select:\s*text/)
+  assert.match(selectableContentRule, /-ms-user-select:\s*text/)
+  assert.doesNotMatch(contentRule, /\n\s*height:\s*100%/)
+  assert.doesNotMatch(contentRule, /\n\s*overflow:\s*auto/)
+  assert.match(bodyRule, /overflow-y:\s*auto/)
+  assert.match(bodyRule, /overscroll-behavior:\s*contain/)
+  assert.match(bodyRule, /scrollbar-width:\s*none/)
+  assert.match(bodyRule, /-ms-overflow-style:\s*none/)
+  assert.match(bodyScrollbarRule, /display:\s*none/)
+  assert.match(pageScrollLockRule, /overflow:\s*hidden/)
+  assert.doesNotMatch(bodyRule, /\n\s*overflow:\s*hidden/)
+  assert.doesNotMatch(preRule, /\n\s*overflow:\s*auto/)
+  assert.match(tabsButtonRule, /white-space:\s*nowrap/)
+  assert.match(tabsButtonRule, /font-size:\s*0\.78rem/)
+  const rawLogStart = style.indexOf('.raw-log-backdrop')
+  const rawLogEnd = style.indexOf('@media (max-width: 768px)', rawLogStart)
+  const rawLogStyles = style.slice(rawLogStart, rawLogEnd)
+  assert.doesNotMatch(rawLogStyles, /rgba\(|transparent|backdrop-filter/)
+  assert.doesNotMatch(preRule, /\n\s*max-height:/)
+})

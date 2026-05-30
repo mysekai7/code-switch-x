@@ -71,41 +71,90 @@
     </div>
     <div class="contrib-page">
       <section class="contrib-hero">
-        <h1 v-if="showHomeTitle">{{ t('components.main.hero.title') }}</h1>
+        <h1 v-if="shouldShowHomeTitle">{{ t('components.main.hero.title') }}</h1>
         <!-- <p class="lead">
           {{ t('components.main.hero.lead') }}
         </p> -->
       </section>
 
       <section
-        v-if="showHeatmap"
+        v-if="shouldShowHeatmap"
         ref="heatmapContainerRef"
         class="contrib-wall"
         :aria-label="t('components.main.heatmap.ariaLabel')"
       >
-        <div class="contrib-legend">
-          <span>{{ t('components.main.heatmap.legendLow') }}</span>
-          <span v-for="level in 5" :key="level" :class="['legend-box', intensityClass(level - 1)]" />
-          <span>{{ t('components.main.heatmap.legendHigh') }}</span>
-        </div>
-
-        <div class="contrib-grid">
-          <div
-            v-for="(week, weekIndex) in usageHeatmap"
-            :key="weekIndex"
-            class="contrib-column"
-          >
-            <div
-              v-for="(day, dayIndex) in week"
-              :key="dayIndex"
-              class="contrib-cell"
-              :class="intensityClass(day.intensity)"
-              @mouseenter="showUsageTooltip(day, $event)"
-              @mousemove="showUsageTooltip(day, $event)"
-              @mouseleave="hideUsageTooltip"
-            />
+        <div class="contrib-calendar">
+          <div class="contrib-grid-shell">
+            <div class="contrib-axis-x" aria-hidden="true">
+              <span class="contrib-axis-corner"></span>
+              <div class="contrib-axis-x-groups">
+                <span
+                  v-for="group in heatmapDayGroups"
+                  :key="`date-axis-${group.key}`"
+                  class="contrib-axis-x-label"
+                >
+                  {{ group.showLabel ? group.label : '' }}
+                </span>
+              </div>
+            </div>
+            <div class="contrib-axis-buckets" aria-hidden="true">
+              <span class="contrib-axis-corner"></span>
+              <div class="contrib-axis-bucket-labels">
+                <span
+                  v-for="label in heatmapBucketTicks"
+                  :key="label.key"
+                  class="contrib-axis-bucket-label"
+                  :class="{ boundary: label.boundary }"
+                >
+                  {{ label.value }}
+                </span>
+              </div>
+            </div>
+            <div class="contrib-grid-row">
+              <div
+                class="contrib-axis-y"
+                :style="{ gridTemplateRows: `repeat(${HEATMAP_ROWS}, 10px)` }"
+                aria-hidden="true"
+              >
+                <span
+                  v-for="tick in heatmapHourOffsetTicks"
+                  :key="tick.key"
+                  class="contrib-axis-y-label"
+                >
+                  {{ tick.value }}
+                </span>
+              </div>
+              <div class="contrib-grid contrib-grid-compact">
+                <div
+                  v-for="(column, columnIndex) in usageHeatmap"
+                  :key="heatmapColumnKey(column, columnIndex)"
+                  class="contrib-column"
+                  :class="{ 'contrib-day-boundary': columnIndex > 0 && columnIndex % BUCKETS_PER_DAY === 0 }"
+                >
+                  <div
+                    v-for="day in column"
+                    :key="day.dateKey"
+                    class="contrib-cell"
+                    :class="intensityClass(day.intensity)"
+                    @mouseenter="showUsageTooltip(day, $event)"
+                    @mousemove="showUsageTooltip(day, $event)"
+                    @mouseleave="hideUsageTooltip"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
+
+        <div class="contrib-footer">
+          <span class="contrib-help">{{ t('components.main.heatmap.ariaLabel') }}</span>
+          <div class="contrib-intensity">
+            <span>{{ t('components.main.heatmap.legendLow') }}</span>
+            <span v-for="level in 5" :key="level" :class="['legend-box', intensityClass(level - 1)]" />
+            <span>{{ t('components.main.heatmap.legendHigh') }}</span>
+          </div>
+        </div>
+
         <div
           v-if="usageTooltip.visible"
           ref="tooltipRef"
@@ -294,7 +343,11 @@
           </div>
           <div class="card-actions">
             <label class="mac-switch sm">
-              <input type="checkbox" v-model="card.enabled" @change="persistProviders(activeTab)" />
+              <input
+                type="checkbox"
+                :checked="card.enabled"
+                @change="onProviderEnabledChange(card, activeTab, $event)"
+              />
               <span></span>
             </label>
             <button class="ghost-icon" @click="configure(card)">
@@ -474,15 +527,18 @@ import { useI18n } from 'vue-i18n'
 import { Listbox, ListboxButton, ListboxOptions, ListboxOption } from '@headlessui/vue'
 import { Browser } from '@wailsio/runtime'
 import {
-	buildUsageHeatmapMatrix,
-	generateFallbackUsageHeatmap,
-	DEFAULT_HEATMAP_DAYS,
-	calculateHeatmapDayRange,
-	type UsageHeatmapWeek,
-	type UsageHeatmapDay,
+  buildUsageHeatmapMatrix,
+  generateFallbackUsageHeatmap,
+  DEFAULT_HEATMAP_DAYS,
+  HEATMAP_ROWS,
+  BUCKETS_PER_DAY,
+  calculateHeatmapDayRange,
+  type UsageHeatmapWeek,
+  type UsageHeatmapDay,
 } from '../../data/usageHeatmap'
 import { automationCardGroups, createAutomationCards, type AutomationCard } from '../../data/cards'
 import { defaultProviderType, normalizeProviderType, providerTypeOptions } from '../../data/providerTypes'
+import { createSequentialTaskQueue } from '../../services/providerSaveQueue'
 import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
@@ -495,6 +551,12 @@ import { fetchHeatmapStats, fetchProviderDailyStats, type ProviderDailyStat } fr
 import { fetchCurrentVersion } from '../../services/version'
 import { fetchAppSettings, type AppSettings } from '../../services/appSettings'
 import { getCurrentTheme, setTheme, type ThemeMode } from '../../utils/ThemeManager'
+import { showToast } from '../../utils/toast'
+import {
+  providerPersistenceErrorMessage,
+  saveProviderSnapshot,
+  serializeProviderSnapshots,
+} from '../../services/providerPersistence'
 import { useRouter } from 'vue-router'
 
 const { t, locale } = useI18n()
@@ -511,6 +573,8 @@ const releasePageUrl = 'https://github.com/mysekai7/code-switch-x/releases'
 const releaseApiUrl = 'https://api.github.com/repos/mysekai7/code-switch-x/releases/latest'
 
 const HEATMAP_DAYS = DEFAULT_HEATMAP_DAYS
+const HEATMAP_DATE_LABEL_INTERVAL = 3
+const HEATMAP_OFFSET_LABEL_INTERVAL = 2
 const usageHeatmap = ref<UsageHeatmapWeek[]>(generateFallbackUsageHeatmap(HEATMAP_DAYS))
 const heatmapContainerRef = ref<HTMLElement | null>(null)
 const tooltipRef = ref<HTMLElement | null>(null)
@@ -537,15 +601,28 @@ const providerStatsLoaded = reactive<Record<ProviderTab, boolean>>({
 } as Record<ProviderTab, boolean>)
 let providerStatsTimer: number | undefined
 let updateTimer: number | undefined
-const showHeatmap = ref(true)
-const showHomeTitle = ref(true)
+const appSettingsLoaded = ref(false)
+const showHeatmap = ref(false)
+const showHomeTitle = ref(false)
 const mcpIcon = lobeIcons['mcp'] ?? ''
 const appVersion = ref('')
 const hasUpdateAvailable = ref(false)
+const shouldShowHeatmap = computed(() => appSettingsLoaded.value && showHeatmap.value)
+const shouldShowHomeTitle = computed(() => appSettingsLoaded.value && showHomeTitle.value)
 
 const intensityClass = (value: number) => `gh-level-${value}`
 
 type TooltipPlacement = 'above' | 'below'
+type HeatmapDayGroup = {
+  key: string
+  label: string
+  showLabel: boolean
+}
+type HeatmapAxisTick = {
+  key: string
+  value: string
+  boundary?: boolean
+}
 
 const usageTooltip = reactive({
   visible: false,
@@ -572,6 +649,13 @@ const tooltipDateFormatter = computed(() =>
   })
 )
 
+const dateAxisFormatter = computed(() =>
+  new Intl.DateTimeFormat(locale.value || 'en', {
+    month: 'numeric',
+    day: 'numeric',
+  })
+)
+
 const currencyFormatter = computed(() =>
   new Intl.NumberFormat(locale.value || 'en', {
     style: 'currency',
@@ -593,6 +677,57 @@ const formattedTooltipLabel = computed(() => {
 const formattedTooltipAmount = computed(() =>
   currencyFormatter.value.format(Math.max(usageTooltip.cost, 0))
 )
+
+const formatHeatmapDateLabel = (day?: UsageHeatmapDay) => {
+  if (!day?.dateKey) return ''
+  const date = new Date(day.dateKey)
+  if (Number.isNaN(date.getTime())) {
+    return day.label.split(' ')[0] ?? ''
+  }
+  return dateAxisFormatter.value.format(date)
+}
+
+const heatmapDayGroups = computed<HeatmapDayGroup[]>(() => {
+  const dayCount = Math.ceil(usageHeatmap.value.length / BUCKETS_PER_DAY) || HEATMAP_DAYS
+  return Array.from({ length: dayCount }, (_, dayIndex) => {
+    const startColumn = dayIndex * BUCKETS_PER_DAY
+    const cells = usageHeatmap.value
+      .slice(startColumn, startColumn + BUCKETS_PER_DAY)
+      .flatMap((column) => column)
+    const firstCell = cells[0]
+    return {
+      key: firstCell?.dateKey ?? `heatmap-day-${dayIndex}`,
+      label: formatHeatmapDateLabel(firstCell),
+      showLabel:
+        dayIndex === 0 ||
+        dayIndex === dayCount - 1 ||
+        dayIndex % HEATMAP_DATE_LABEL_INTERVAL === 0,
+    }
+  })
+})
+
+const heatmapBucketTicks = computed<HeatmapAxisTick[]>(() =>
+  usageHeatmap.value.map((_, columnIndex) => {
+    const bucketIndex = columnIndex % BUCKETS_PER_DAY
+    return {
+      key: `heatmap-bucket-${columnIndex}`,
+      value: columnIndex < BUCKETS_PER_DAY
+        ? String(bucketIndex * HEATMAP_ROWS).padStart(2, '0')
+        : '',
+      boundary: columnIndex > 0 && bucketIndex === 0,
+    }
+  })
+)
+
+const heatmapHourOffsetTicks = computed<HeatmapAxisTick[]>(() =>
+  Array.from({ length: HEATMAP_ROWS }, (_, offset) => ({
+    key: `heatmap-hour-offset-${offset}`,
+    value: offset % HEATMAP_OFFSET_LABEL_INTERVAL === 0 ? `+${offset}` : '',
+  }))
+)
+
+const heatmapColumnKey = (column: UsageHeatmapWeek, columnIndex: number) =>
+  column[0]?.dateKey ?? `heatmap-column-${columnIndex}`
 
 const usageTooltipMetrics = computed(() => [
   {
@@ -702,6 +837,8 @@ const loadAppSettings = async () => {
     console.error('failed to load app settings', error)
     showHeatmap.value = true
     showHomeTitle.value = true
+  } finally {
+    appSettingsLoaded.value = true
   }
 }
 
@@ -732,8 +869,12 @@ const checkForUpdates = async () => {
   }
 }
 
-const handleAppSettingsUpdated = () => {
-  void loadAppSettings()
+const handleAppSettingsUpdated = async () => {
+  const wasHeatmapEnabled = showHeatmap.value
+  await loadAppSettings()
+  if (showHeatmap.value && !wasHeatmapEnabled) {
+    void loadUsageHeatmap()
+  }
 }
 
 const startUpdateTimer = () => {
@@ -783,20 +924,61 @@ const tabs = [
 ] as const
 type ProviderTab = (typeof tabs)[number]['id']
 const providerTabIds = tabs.map((tab) => tab.id) as ProviderTab[]
+const MAIN_PROVIDER_TAB_STORAGE_KEY = 'code-switch-x-main-provider-tab'
+
+const readStoredProviderTab = (): ProviderTab => {
+  if (typeof window === 'undefined') return providerTabIds[0]
+  try {
+    const stored = localStorage.getItem(MAIN_PROVIDER_TAB_STORAGE_KEY)
+    return providerTabIds.includes(stored as ProviderTab) ? (stored as ProviderTab) : providerTabIds[0]
+  } catch {
+    return providerTabIds[0]
+  }
+}
+
+const persistSelectedProviderTab = (tab: ProviderTab) => {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(MAIN_PROVIDER_TAB_STORAGE_KEY, tab)
+  } catch {
+    // Ignore unavailable storage; the tab still changes for the current view.
+  }
+}
 
 const cards = reactive<Record<ProviderTab, AutomationCard[]>>({
   claude: createAutomationCards(automationCardGroups.claude),
   codex: createAutomationCards(automationCardGroups.codex),
 })
 const draggingId = ref<number | null>(null)
+const providerSaveQueues: Record<ProviderTab, ReturnType<typeof createSequentialTaskQueue>> = {
+  claude: createSequentialTaskQueue(),
+  codex: createSequentialTaskQueue(),
+}
 
-const serializeProviders = (providers: AutomationCard[]) => providers.map((provider) => ({ ...provider }))
+const serializeProviders = (providers: AutomationCard[]) => serializeProviderSnapshots(providers)
 
-const persistProviders = async (tabId: ProviderTab) => {
+const persistProviderList = (tabId: ProviderTab, providers: AutomationCard[]) => {
+  const snapshot = serializeProviders(providers)
+  return providerSaveQueues[tabId](() => saveProviderSnapshot(tabId, snapshot, SaveProviders))
+}
+
+const persistProviders = (tabId: ProviderTab) => persistProviderList(tabId, cards[tabId])
+
+const showProviderSaveError = (error: unknown) => {
+  console.error('Failed to save providers', error)
+  showToast(
+    providerPersistenceErrorMessage(error, t('components.main.form.errors.saveFailed')),
+    'error',
+  )
+}
+
+const saveProviderListWithFeedback = async (tabId: ProviderTab, providers: AutomationCard[]) => {
   try {
-    await SaveProviders(tabId, serializeProviders(cards[tabId]))
+    await persistProviderList(tabId, providers)
+    return true
   } catch (error) {
-    console.error('Failed to save providers', error)
+    showProviderSaveError(error)
+    return false
   }
 }
 
@@ -974,11 +1156,13 @@ const stopProviderStatsTimer = () => {
 }
 
 onMounted(async () => {
-  void loadUsageHeatmap()
   await loadProvidersFromDisk()
   await Promise.all(providerTabIds.map(refreshProxyState))
   await Promise.all(providerTabIds.map((tab) => loadProviderStats(tab)))
   await loadAppSettings()
+  if (showHeatmap.value) {
+    void loadUsageHeatmap()
+  }
   await checkForUpdates()
   startProviderStatsTimer()
   startUpdateTimer()
@@ -991,7 +1175,7 @@ onUnmounted(() => {
   stopUpdateTimer()
 })
 
-const selectedIndex = ref(0)
+const selectedIndex = ref(providerTabIds.indexOf(readStoredProviderTab()))
 const activeTab = computed<ProviderTab>(() => tabs[selectedIndex.value]?.id ?? tabs[0].id)
 const activeCards = computed(() => cards[activeTab.value] ?? [])
 const currentProxyLabel = computed(() =>
@@ -1104,7 +1288,7 @@ const closeConfirm = () => {
   confirmState.card = null
 }
 
-const submitModal = () => {
+const submitModal = async () => {
   const list = cards[modalState.tabId]
   if (!list) return
   const name = modalState.form.name.trim()
@@ -1122,18 +1306,24 @@ const submitModal = () => {
     return
   }
 
+  const currentProviders = serializeProviders(list)
+  let nextProviders: AutomationCard[]
   if (editingCard.value) {
-    Object.assign(editingCard.value, {
-      apiUrl: apiUrl || editingCard.value.apiUrl,
-      apiKey,
-      officialSite,
-      icon,
-      providerType,
-      enabled: modalState.form.enabled,
-      supportedModels: modalState.form.supportedModels || {},
-      modelMapping: modalState.form.modelMapping || {},
-    })
-    void persistProviders(modalState.tabId)
+    nextProviders = currentProviders.map((provider) =>
+      provider.id === editingCard.value?.id
+        ? {
+            ...provider,
+            apiUrl: apiUrl || provider.apiUrl,
+            apiKey,
+            officialSite,
+            icon,
+            providerType,
+            enabled: modalState.form.enabled,
+            supportedModels: modalState.form.supportedModels || {},
+            modelMapping: modalState.form.modelMapping || {},
+          }
+        : provider,
+    )
   } else {
     const newCard: AutomationCard = {
       id: Date.now(),
@@ -1149,10 +1339,13 @@ const submitModal = () => {
       supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
     }
-    list.push(newCard)
-    void persistProviders(modalState.tabId)
+    nextProviders = [...currentProviders, newCard]
   }
 
+  const saved = await saveProviderListWithFeedback(modalState.tabId, nextProviders)
+  if (!saved) return
+
+  replaceProviders(modalState.tabId, nextProviders)
   closeModal()
 }
 
@@ -1160,14 +1353,29 @@ const configure = (card: AutomationCard) => {
   openEditModal(card)
 }
 
-const remove = (id: number, tabId: ProviderTab = activeTab.value) => {
+const onProviderEnabledChange = async (card: AutomationCard, tabId: ProviderTab, event: Event) => {
+  const target = event.target as HTMLInputElement | null
   const list = cards[tabId]
-  if (!list) return
-  const index = list.findIndex((card) => card.id === id)
-  if (index > -1) {
-    list.splice(index, 1)
-    void persistProviders(tabId)
+  if (!target || !list) return
+  const nextProviders = serializeProviders(list).map((provider) =>
+    provider.id === card.id ? { ...provider, enabled: target.checked } : provider,
+  )
+  const saved = await saveProviderListWithFeedback(tabId, nextProviders)
+  if (saved) {
+    replaceProviders(tabId, nextProviders)
   }
+}
+
+const remove = async (id: number, tabId: ProviderTab = activeTab.value) => {
+  const list = cards[tabId]
+  if (!list) return false
+  const nextProviders = serializeProviders(list).filter((card) => card.id !== id)
+  if (nextProviders.length === list.length) return false
+  const saved = await saveProviderListWithFeedback(tabId, nextProviders)
+  if (saved) {
+    replaceProviders(tabId, nextProviders)
+  }
+  return saved
 }
 
 const requestRemove = (card: AutomationCard) => {
@@ -1176,17 +1384,19 @@ const requestRemove = (card: AutomationCard) => {
   confirmState.open = true
 }
 
-const confirmRemove = () => {
+const confirmRemove = async () => {
   if (!confirmState.card) return
-  remove(confirmState.card.id, confirmState.tabId)
-  closeConfirm()
+  const removed = await remove(confirmState.card.id, confirmState.tabId)
+  if (removed) {
+    closeConfirm()
+  }
 }
 
 const onDragStart = (id: number) => {
   draggingId.value = id
 }
 
-const onDrop = (targetId: number) => {
+const onDrop = async (targetId: number) => {
   if (draggingId.value === null || draggingId.value === targetId) return
   const currentTab = activeTab.value
   const list = cards[currentTab]
@@ -1194,11 +1404,15 @@ const onDrop = (targetId: number) => {
   const fromIndex = list.findIndex((card) => card.id === draggingId.value)
   const toIndex = list.findIndex((card) => card.id === targetId)
   if (fromIndex === -1 || toIndex === -1) return
-  const [moved] = list.splice(fromIndex, 1)
+  const nextProviders = serializeProviders(list)
+  const [moved] = nextProviders.splice(fromIndex, 1)
   const newIndex = fromIndex < toIndex ? toIndex - 1 : toIndex
-  list.splice(newIndex, 0, moved)
+  nextProviders.splice(newIndex, 0, moved)
   draggingId.value = null
-  void persistProviders(currentTab)
+  const saved = await saveProviderListWithFeedback(currentTab, nextProviders)
+  if (saved) {
+    replaceProviders(currentTab, nextProviders)
+  }
 }
 
 const onDragEnd = () => {
@@ -1228,12 +1442,12 @@ const vendorInitials = (name: string) => {
 }
 
 const onTabChange = (idx: number) => {
-  selectedIndex.value = idx
   const nextTab = tabs[idx]?.id
-  if (nextTab) {
-    void refreshProxyState(nextTab as ProviderTab)
-    void loadProviderStats(nextTab as ProviderTab)
-  }
+  if (!nextTab) return
+  selectedIndex.value = idx
+  persistSelectedProviderTab(nextTab)
+  void refreshProxyState(nextTab)
+  void loadProviderStats(nextTab)
 }
 
 </script>

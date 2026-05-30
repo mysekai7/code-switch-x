@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,7 +132,7 @@ func (css *ClaudeSettingsService) paths() (settingsPath string, backupPath strin
 func (css *ClaudeSettingsService) baseURL() string {
 	addr := strings.TrimSpace(css.relayAddr)
 	if addr == "" {
-		addr = ":18100"
+		addr = fmt.Sprintf(":%d", defaultRelayPort)
 	}
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
 		return addr

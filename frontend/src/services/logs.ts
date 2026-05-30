@@ -1,4 +1,5 @@
 import { Call } from '@wailsio/runtime'
+import { LoadProviders } from '../../bindings/codeswitch/services/providerservice'
 
 export type RequestLog = {
   id: number
@@ -24,11 +25,34 @@ export type RequestLog = {
   has_pricing?: boolean
 }
 
+export type RequestLogPayload = {
+  log_id: number
+  has_payload: boolean
+  request_headers: string
+  request_body: string
+  response_headers: string
+  response_body: string
+  upstream_request_body: string
+  upstream_response_body: string
+  request_truncated: boolean
+  response_truncated: boolean
+  created_at: string
+}
+
 type RequestLogQuery = {
   platform?: string
   provider?: string
   limit?: number
 }
+
+type ProviderKind = 'claude' | 'codex'
+type ConfiguredProvider = {
+  name?: string
+}
+
+const allProviderKinds: ProviderKind[] = ['claude', 'codex']
+const isProviderKind = (platform: string): platform is ProviderKind =>
+  allProviderKinds.includes(platform as ProviderKind)
 
 export const fetchRequestLogs = async (query: RequestLogQuery = {}): Promise<RequestLog[]> => {
   const platform = query.platform ?? ''
@@ -38,7 +62,22 @@ export const fetchRequestLogs = async (query: RequestLogQuery = {}): Promise<Req
 }
 
 export const fetchLogProviders = async (platform = ''): Promise<string[]> => {
-  return Call.ByName('codeswitch/services.LogService.ListProviders', platform)
+  const providerKinds = isProviderKind(platform) ? [platform] : allProviderKinds
+  const providerGroups = await Promise.all(providerKinds.map((kind) => LoadProviders(kind)))
+  const providerNames = new Set<string>()
+
+  providerGroups.flat().forEach((provider: ConfiguredProvider) => {
+    const name = provider?.name?.trim()
+    if (name) {
+      providerNames.add(name)
+    }
+  })
+
+  return Array.from(providerNames)
+}
+
+export const fetchRequestLogPayload = async (id: number): Promise<RequestLogPayload> => {
+  return Call.ByName('codeswitch/services.LogService.GetRequestLogPayload', id)
 }
 
 export type LogStatsSeries = {

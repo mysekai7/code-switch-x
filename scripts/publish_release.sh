@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "gh CLI is required. Install from https://cli.github.com/" >&2
-  exit 1
-fi
+require_cmd() {
+  local name="$1"
+  local hint="$2"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "$name is required. $hint" >&2
+    exit 1
+  fi
+}
 
 if [ $# -lt 1 ]; then
   echo "Usage: scripts/publish_release.sh <tag> [notes-file]" >&2
@@ -14,6 +18,7 @@ fi
 TAG="$1"
 NOTES="${2:-RELEASE_NOTES.md}"
 VERSION_VALUE="${TAG#v}"
+UPLOAD_RELEASE="${UPLOAD_RELEASE:-false}"
 
 if [ ! -f "$NOTES" ]; then
   echo "Release notes file '$NOTES' not found" >&2
@@ -25,6 +30,13 @@ CONFIG_FILE="build/config.yml"
 MAC_ARCHS=("arm64" "amd64")
 MAC_ZIPS=()
 LINUX_ASSETS=()
+
+require_cmd wails3 "Install with: go install github.com/wailsapp/wails/v3/cmd/wails3@latest"
+require_cmd yq "Install with: brew install yq"
+require_cmd makensis "Install NSIS/makensis before building the Windows installer."
+if [[ "$UPLOAD_RELEASE" == "true" ]]; then
+  require_cmd gh "Install from https://cli.github.com/"
+fi
 
 rename_first() {
   local glob="$1"
@@ -69,13 +81,11 @@ package_linux_amd64() {
   echo "==> Building Linux amd64"
   env ARCH=amd64 PRODUCTION="true" wails3 task linux:package ${BUILD_OPTS:-}
 
-  rename_first "bin/*.AppImage" "bin/codeswitch-x-linux-amd64.AppImage"
   rename_first "bin/*.deb" "bin/codeswitch-x-linux-amd64.deb"
   rename_first "bin/*.rpm" "bin/codeswitch-x-linux-amd64.rpm"
   rename_first "bin/*.pkg.tar.*" "bin/codeswitch-x-linux-amd64.pkg.tar.zst"
 
   LINUX_ASSETS=(
-    "bin/codeswitch-x-linux-amd64.AppImage"
     "bin/codeswitch-x-linux-amd64.deb"
     "bin/codeswitch-x-linux-amd64.rpm"
     "bin/codeswitch-x-linux-amd64.pkg.tar.zst"
@@ -112,6 +122,10 @@ for asset in "${ASSETS[@]}"; do
   echo "  asset: $asset"
 done
 
-# gh release create "$TAG" "${ASSETS[@]}" \
-#   --title "$TAG" \
-#   --notes-file "$NOTES"
+if [[ "$UPLOAD_RELEASE" == "true" ]]; then
+  gh release create "$TAG" "${ASSETS[@]}" \
+    --title "$TAG" \
+    --notes-file "$NOTES"
+else
+  echo "Release upload skipped. Set UPLOAD_RELEASE=true to create the GitHub release."
+fi

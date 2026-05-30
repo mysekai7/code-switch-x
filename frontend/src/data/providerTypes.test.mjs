@@ -69,6 +69,21 @@ test('provider protocol copy explains forwarding and conversion behavior', async
   assert.match(en.components.main.form.providerTypeDescriptions.deepseek, /Codex/)
 })
 
+test('model whitelist and mapping copy marks both fields optional', async () => {
+  const zh = await loadLocale('zh')
+  const en = await loadLocale('en')
+
+  assert.match(zh.components.provider.modelWhitelist.label, /可选/)
+  assert.match(zh.components.provider.modelWhitelist.tooltip, /不配置/)
+  assert.match(zh.components.provider.modelMapping.label, /可选/)
+  assert.match(zh.components.provider.modelMapping.tooltip, /不配置/)
+
+  assert.match(en.components.provider.modelWhitelist.label, /optional/i)
+  assert.match(en.components.provider.modelWhitelist.tooltip, /leave.*empty/i)
+  assert.match(en.components.provider.modelMapping.label, /optional/i)
+  assert.match(en.components.provider.modelMapping.tooltip, /leave.*empty/i)
+})
+
 test('pass-through provider type has a default icon', async () => {
   const { default: fallbackIcons } = await loadFallbackIcons()
 

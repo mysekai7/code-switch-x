@@ -68,12 +68,16 @@ func main() {
 		// 处理错误，比如日志或退出
 	}
 	providerService := services.NewProviderService()
-	providerRelay := services.NewProviderRelayService(providerService, ":18100")
+	autoStartService := services.NewAutoStartService()
+	appSettings := services.NewAppSettingsService(autoStartService)
+	settings, settingsErr := appSettings.GetAppSettings()
+	if settingsErr != nil {
+		log.Printf("load app settings error: %v", settingsErr)
+	}
+	providerRelay := services.NewProviderRelayService(providerService, relayAddrFromSettings(settings), appSettings)
 	claudeSettings := services.NewClaudeSettingsService(providerRelay.Addr())
 	codexSettings := services.NewCodexSettingsService(providerRelay.Addr())
 	logService := services.NewLogService()
-	autoStartService := services.NewAutoStartService()
-	appSettings := services.NewAppSettingsService(autoStartService)
 	mcpService := services.NewMCPService()
 	skillService := services.NewSkillService()
 	importService := services.NewImportService(providerService, mcpService)
@@ -243,6 +247,14 @@ func loadTrayIcon(path string) []byte {
 		return nil
 	}
 	return data
+}
+
+func relayAddrFromSettings(settings services.AppSettings) string {
+	port := settings.RelayPort
+	if port == 0 {
+		port = services.DefaultRelayPort
+	}
+	return fmt.Sprintf(":%d", port)
 }
 
 func handleDockVisibility(service *dock.DockService, show bool) {

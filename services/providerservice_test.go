@@ -447,22 +447,21 @@ func TestProvider_ValidateConfiguration(t *testing.T) {
 			errorContains: "不在 supportedModels 中",
 		},
 
-		// 警告：只配置映射未配置白名单
+		// 只配置映射未配置白名单：无法本地验证目标模型，但应允许保存
 		{
-			name: "警告-无白名单",
+			name: "映射无白名单-允许",
 			provider: Provider{
 				Name: "test-provider",
 				ModelMapping: map[string]string{
 					"external": "internal",
 				},
 			},
-			expectErrors:  true,
-			errorContains: "未配置 supportedModels",
+			expectErrors: false,
 		},
 
-		// 警告：自映射
+		// 自映射通常无意义，但不应阻止保存
 		{
-			name: "警告-自映射",
+			name: "自映射-允许",
 			provider: Provider{
 				Name: "test-provider",
 				SupportedModels: map[string]bool{
@@ -472,8 +471,7 @@ func TestProvider_ValidateConfiguration(t *testing.T) {
 					"model-a": "model-a",
 				},
 			},
-			expectErrors:  true,
-			errorContains: "映射到自身",
+			expectErrors: false,
 		},
 
 		// 通配符映射（不验证）
@@ -526,6 +524,21 @@ func TestProvider_ValidateConfiguration_AllowsDeepSeekWithoutSupportedModels(t *
 		ProviderType:    "deepseek",
 		ModelMapping:    map[string]string{"gpt-*": "deepseek-v4-pro"},
 		SupportedModels: nil,
+	}
+
+	errors := provider.ValidateConfiguration()
+	if len(errors) != 0 {
+		t.Fatalf("ValidateConfiguration() = %v, want no errors", errors)
+	}
+}
+
+func TestProvider_ValidateConfiguration_AllowsModelMappingWithoutSupportedModels(t *testing.T) {
+	provider := Provider{
+		Name:            "deepseek",
+		ProviderType:    "custom",
+		APIURL:          "https://api.deepseek.com/anthropic",
+		ModelMapping:    map[string]string{"claude-*": "deepseek-v4-pro"},
+		SupportedModels: map[string]bool{},
 	}
 
 	errors := provider.ValidateConfiguration()

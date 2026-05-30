@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +20,12 @@ type Provider struct {
 	// ProviderType controls protocol adaptation. Missing values fall back to
 	// Icon for compatibility with older configs that used icon as the selector.
 	ProviderType string `json:"providerType,omitempty"`
-	Tint         string `json:"tint"`
-	Accent       string `json:"accent"`
-	Enabled      bool   `json:"enabled"`
+	// AuthMode controls upstream auth header injection for Claude providers.
+	// Empty/auto infers from APIURL; supported values: anthropic, bearer.
+	AuthMode string `json:"authMode,omitempty"`
+	Tint     string `json:"tint"`
+	Accent   string `json:"accent"`
+	Enabled  bool   `json:"enabled"`
 
 	// 模型白名单 - Provider 原生支持的模型名
 	// 使用 map 实现 O(1) 查找，向后兼容（omitempty）
@@ -50,6 +54,28 @@ func (p Provider) EffectiveProviderType() string {
 	default:
 		return "custom"
 	}
+}
+
+func (p Provider) ClaudeAuthMode() string {
+	mode := strings.TrimSpace(strings.ToLower(p.AuthMode))
+	switch mode {
+	case "anthropic", "x-api-key", "x_api_key", "api-key", "apikey":
+		return "anthropic"
+	case "bearer", "authorization", "auth-token", "auth_token", "claude-auth", "claude_auth":
+		return "bearer"
+	}
+	if isAnthropicOfficialAPIURL(p.APIURL) {
+		return "anthropic"
+	}
+	return "bearer"
+}
+
+func isAnthropicOfficialAPIURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.anthropic.com")
 }
 
 type providerEnvelope struct {
@@ -238,8 +264,9 @@ func (p *Provider) ValidateConfiguration() []string {
 	// DeepSeek 走协议转换模式，模型映射通常由用户直接指定，
 	// 不强制要求本地白名单可验证。
 	if providerType != "deepseek" {
-		// 规则 1：ModelMapping 的 value 必须在 SupportedModels 中
-		if p.ModelMapping != nil && p.SupportedModels != nil {
+		// 规则 1：如果显式配置了 SupportedModels，ModelMapping 的 value 必须在白名单中。
+		// 未配置白名单时无法验证目标模型，保留映射并在运行时交给上游处理。
+		if p.ModelMapping != nil && len(p.SupportedModels) > 0 {
 			for externalModel, internalModel := range p.ModelMapping {
 				// 检查是否为通配符映射
 				if strings.Contains(internalModel, "*") {
@@ -267,26 +294,6 @@ func (p *Provider) ValidateConfiguration() []string {
 						externalModel, internalModel, internalModel,
 					))
 				}
-			}
-		}
-
-		// 规则 2：如果配置了 ModelMapping 但未配置 SupportedModels，给出警告
-		if p.ModelMapping != nil && len(p.ModelMapping) > 0 &&
-			(p.SupportedModels == nil || len(p.SupportedModels) == 0) {
-			errors = append(errors,
-				"警告：配置了 modelMapping 但未配置 supportedModels，映射的目标模型无法验证",
-			)
-		}
-	}
-
-	// 规则 3：检测自映射（通常无意义，但不是错误）
-	if p.ModelMapping != nil {
-		for external, internal := range p.ModelMapping {
-			if external == internal {
-				errors = append(errors, fmt.Sprintf(
-					"警告：模型 '%s' 映射到自身，这通常无意义",
-					external,
-				))
 			}
 		}
 	}

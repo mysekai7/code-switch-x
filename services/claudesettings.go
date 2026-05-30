@@ -11,8 +11,8 @@ import (
 const (
 	claudeSettingsDir      = ".claude"
 	claudeSettingsFileName = "settings.json"
-	claudeBackupFileName   = "cc-studio.back.settings.json"
-	claudeAuthTokenValue   = "code-switch"
+	claudeBackupFileName   = "code-switch-x.back.settings.json"
+	claudeAuthTokenValue   = "code-switch-x"
 )
 
 type ClaudeProxyStatus struct {

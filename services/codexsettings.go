@@ -13,15 +13,15 @@ import (
 const (
 	codexSettingsDir      = ".codex"
 	codexConfigFileName   = "config.toml"
-	codexBackupConfigName = "cc-studio.back.config.toml"
+	codexBackupConfigName = "code-switch-x.back.config.toml"
 	codexAuthFileName     = "auth.json"
-	codexBackupAuthName   = "cc-studio.back.auth.json"
+	codexBackupAuthName   = "code-switch-x.back.auth.json"
 	codexPreferredAuth    = "apikey"
 	codexDefaultModel     = "gpt-5-codex"
-	codexProviderKey      = "code-switch"
+	codexProviderKey      = "code-switch-x"
 	codexEnvKey           = "OPENAI_API_KEY"
 	codexWireAPI          = "responses"
-	codexTokenValue       = "code-switch"
+	codexTokenValue       = "code-switch-x"
 )
 
 type CodexSettingsService struct {

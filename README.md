@@ -1,6 +1,8 @@
-# Code Switch
+# Code Switch X
 
 集中管理 Claude Code & Codex 供应商
+
+> 本项目 clone 自 https://github.com/daodao97/code-switch，并在此基础上围绕应用隔离、配置兼容与 DeepSeek 协议转换做了优化。
 
 - 无需重启 cc & codex, 平滑切换不同供应商
 - 支持多供应商自动降级, 保证使用体验
@@ -24,18 +26,18 @@
 
 请求由 proxyHandler 动态挑选符合当前优先级与启用状态的 provider，并在失败时自动回退。
 
-以上流程让 cli 看到的是一个固定的本地地址，而真实请求会被 Code Switch 透明地路由到你在应用里维护的供应商列表
+以上流程让 cli 看到的是一个固定的本地地址，而真实请求会被 Code Switch X 透明地路由到你在应用里维护的供应商列表
 
 ## 下载
 
-[macOS](https://github.com/daodao97/code-swtich/releases) | [Windows](https://github.com/daodao97/code-swtich/releases) | [Linux (amd64)](https://github.com/daodao97/code-swtich/releases)
+[macOS](https://github.com/mysekai7/code-switch-x/releases) | [Windows](https://github.com/mysekai7/code-switch-x/releases) | [Linux (amd64)](https://github.com/mysekai7/code-switch-x/releases)
 
 
 ## 预览
-![亮色主界面](resources/images/code-switch.png)
-![暗色主界面](resources/images/code-swtich-dark.png)
-![日志亮色](resources/images/code-switch-logs.png)
-![日志暗色](resources/images/code-switch-logs-dark.png)
+![亮色主界面](resources/images/code-switch-x.png)
+![暗色主界面](resources/images/code-switch-x-dark.png)
+![日志亮色](resources/images/code-switch-x-logs.png)
+![日志暗色](resources/images/code-switch-x-logs-dark.png)
 
 ## 开发准备
 - Go 1.24+
@@ -72,10 +74,10 @@ wails3 task dev
 
 ## 发布
 脚本 `scripts/publish_release.sh v0.1.0` 将自动打包并上传以下资产（macOS 会分别构建 arm64 与 amd64）：
-- `codeswitch-macos-arm64.zip`
-- `codeswitch-macos-amd64.zip`
-- `codeswitch-arm64-installer.exe`
-- `codeswitch.exe`
+- `codeswitch-x-macos-arm64.zip`
+- `codeswitch-x-macos-amd64.zip`
+- `CodeSwitchX-amd64-installer.exe`
+- `CodeSwitchX.exe`
 
 若要手动发布，可执行：
 ```bash

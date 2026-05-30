@@ -472,7 +472,7 @@ func (ss *SkillService) downloadFile(rawURL, dest string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "ai-code-studio")
+	req.Header.Set("User-Agent", "code-switch-x")
 	resp, err := ss.httpClient.Do(req)
 	if err != nil {
 		return err

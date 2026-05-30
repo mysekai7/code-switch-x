@@ -1,6 +1,6 @@
 # App Identity Isolation Design
 
-**Goal:** Change only this application's own runtime and packaging identifiers to the `-x` variant, so it does not overwrite data or autostart entries from an existing Code Switch installation on the same Mac.
+**Goal:** Treat this application as the independent `code-switch-x` app, so it does not overwrite data, backups, or autostart entries from any earlier installation on the same Mac.
 
 ## Scope
 
@@ -12,27 +12,29 @@ Change application-owned identifiers:
 - Build/package identity and display name where it identifies this app itself.
 - User-facing text that documents the application-owned data directory.
 
-Do not change Claude/Codex target configuration behavior:
+Keep Claude/Codex target configuration locations compatible:
 - Keep official target directories such as `.claude`, `.codex`, and `.claude.json` unchanged.
-- Keep Claude/Codex proxy provider keys, auth token values, and backup filenames unchanged.
 - Keep Wails Go module binding namespace unchanged to avoid unrelated frontend regeneration risk.
 
 ## Design
 
-Introduce centralized application identity constants in the services package. Existing services that currently hard-code `.code-switch`, `.codex-switch`, `CodeSwitch`, `codeswitch.desktop`, or `com.codeswitch.app` will consume those constants.
+Use centralized application identity constants in the services package. App-owned runtime directories, package names, desktop entries, LaunchAgent labels, and backup filenames all use the `code-switch-x` identity.
 
-For macOS autostart, the LaunchAgent label becomes `com.codeswitch-x.app` and the plist path becomes `~/Library/LaunchAgents/com.codeswitch-x.app.plist`. This is enough to avoid replacing an existing `com.codeswitch.app.plist`.
+For macOS autostart, the LaunchAgent label becomes `com.codeswitch-x.app` and the plist path becomes `~/Library/LaunchAgents/com.codeswitch-x.app.plist`. This avoids replacing any earlier app LaunchAgent.
 
 For provider, MCP, skill, app settings, and request log storage, the path moves to the `-x` directories. This is the main runtime isolation boundary and prevents the app from writing to an existing installation's application-owned JSON files or SQLite DB.
 
-Build metadata is updated only where it identifies this app package itself: product name, bundle identifier, executable/app name, Linux desktop entry, Windows metadata, and packaging names. The Go module and generated frontend binding imports remain `codeswitch/...` because they are compile-time internals, not runtime storage identity.
+Build metadata is updated where it identifies this app package itself: product name, bundle identifier, executable/app name, Linux desktop entry, Windows metadata, and packaging names. The Go module and generated frontend binding imports remain unchanged because they are compile-time internals, not runtime storage identity.
+
+Claude/Codex backup filenames, injected proxy provider keys, and placeholder auth token values also use `code-switch-x`. Official Claude/Codex directories remain unchanged because those tools read their configuration from those locations.
 
 ## Testing
 
 Add focused service tests that verify:
-- Provider config path uses `.code-switch-x` and not `.code-switch`.
-- App settings path uses `.codex-switch-x` and not `.codex-switch`.
+- Provider config path uses `.code-switch-x`.
+- App settings path uses `.codex-switch-x`.
 - macOS/Linux autostart paths and labels use the `-x` identifiers.
-- Build metadata no longer contains the old package identifiers.
+- Claude/Codex backup names and injected proxy markers use `code-switch-x`.
+- Build metadata and release/download surfaces use `code-switch-x`.
 
 Run focused tests first to prove the current implementation fails, then implement the minimal changes and rerun `go test ./services -count=1`.

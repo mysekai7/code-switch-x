@@ -520,6 +520,20 @@ func TestProvider_ValidateConfiguration(t *testing.T) {
 	}
 }
 
+func TestProvider_ValidateConfiguration_AllowsDeepSeekWithoutSupportedModels(t *testing.T) {
+	provider := Provider{
+		Name:            "deepseek",
+		ProviderType:    "deepseek",
+		ModelMapping:    map[string]string{"gpt-*": "deepseek-v4-pro"},
+		SupportedModels: nil,
+	}
+
+	errors := provider.ValidateConfiguration()
+	if len(errors) != 0 {
+		t.Fatalf("ValidateConfiguration() = %v, want no errors", errors)
+	}
+}
+
 // ==================== Level 分组测试 ====================
 
 func TestProviderLevelGrouping(t *testing.T) {

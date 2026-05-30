@@ -20,7 +20,7 @@ if [ ! -f "$NOTES" ]; then
   exit 1
 fi
 
-MAC_APP_PRIMARY="bin/CodeSwitch.app"
+MAC_APP_PRIMARY="bin/CodeSwitchX.app"
 CONFIG_FILE="build/config.yml"
 MAC_ARCHS=("arm64" "amd64")
 MAC_ZIPS=()
@@ -41,8 +41,8 @@ rename_first() {
 package_macos_arch() {
   local arch="$1"
   local staging_dir="bin/package-${arch}"
-  local staging_app="${staging_dir}/CodeSwitch.app"
-  local zip_path="bin/CodeSwitch-macos-${arch}.zip"
+  local staging_app="${staging_dir}/CodeSwitchX.app"
+  local zip_path="bin/codeswitch-x-macos-${arch}.zip"
 
   echo "==> Building macOS ${arch}"
   env ARCH="$arch" wails3 task package ${BUILD_OPTS:-}
@@ -69,16 +69,16 @@ package_linux_amd64() {
   echo "==> Building Linux amd64"
   env ARCH=amd64 PRODUCTION="true" wails3 task linux:package ${BUILD_OPTS:-}
 
-  rename_first "bin/*.AppImage" "bin/codeswitch-linux-amd64.AppImage"
-  rename_first "bin/*.deb" "bin/codeswitch-linux-amd64.deb"
-  rename_first "bin/*.rpm" "bin/codeswitch-linux-amd64.rpm"
-  rename_first "bin/*.pkg.tar.*" "bin/codeswitch-linux-amd64.pkg.tar.zst"
+  rename_first "bin/*.AppImage" "bin/codeswitch-x-linux-amd64.AppImage"
+  rename_first "bin/*.deb" "bin/codeswitch-x-linux-amd64.deb"
+  rename_first "bin/*.rpm" "bin/codeswitch-x-linux-amd64.rpm"
+  rename_first "bin/*.pkg.tar.*" "bin/codeswitch-x-linux-amd64.pkg.tar.zst"
 
   LINUX_ASSETS=(
-    "bin/codeswitch-linux-amd64.AppImage"
-    "bin/codeswitch-linux-amd64.deb"
-    "bin/codeswitch-linux-amd64.rpm"
-    "bin/codeswitch-linux-amd64.pkg.tar.zst"
+    "bin/codeswitch-x-linux-amd64.AppImage"
+    "bin/codeswitch-x-linux-amd64.deb"
+    "bin/codeswitch-x-linux-amd64.rpm"
+    "bin/codeswitch-x-linux-amd64.pkg.tar.zst"
   )
 }
 
@@ -102,8 +102,8 @@ fi
 
 ASSETS=(
   "${MAC_ZIPS[@]}"
-  "bin/codeswitch-amd64-installer.exe"
-  "bin/codeswitch.exe"
+  "bin/CodeSwitchX-amd64-installer.exe"
+  "bin/CodeSwitchX.exe"
   "${LINUX_ASSETS[@]}"
 )
 

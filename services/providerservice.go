@@ -233,45 +233,50 @@ func (p *Provider) GetEffectiveModel(requestedModel string) string {
 // 返回验证错误列表（空则表示验证通过）
 func (p *Provider) ValidateConfiguration() []string {
 	errors := make([]string, 0)
+	providerType := p.EffectiveProviderType()
 
-	// 规则 1：ModelMapping 的 value 必须在 SupportedModels 中
-	if p.ModelMapping != nil && p.SupportedModels != nil {
-		for externalModel, internalModel := range p.ModelMapping {
-			// 检查是否为通配符映射
-			if strings.Contains(internalModel, "*") {
-				// 通配符映射暂不验证（需要具体请求才能展开）
-				continue
-			}
+	// DeepSeek 走协议转换模式，模型映射通常由用户直接指定，
+	// 不强制要求本地白名单可验证。
+	if providerType != "deepseek" {
+		// 规则 1：ModelMapping 的 value 必须在 SupportedModels 中
+		if p.ModelMapping != nil && p.SupportedModels != nil {
+			for externalModel, internalModel := range p.ModelMapping {
+				// 检查是否为通配符映射
+				if strings.Contains(internalModel, "*") {
+					// 通配符映射暂不验证（需要具体请求才能展开）
+					continue
+				}
 
-			// 精确映射需要验证
-			supported := false
-			if p.SupportedModels[internalModel] {
-				supported = true
-			} else {
-				// 检查通配符白名单
-				for supportedPattern := range p.SupportedModels {
-					if matchWildcard(supportedPattern, internalModel) {
-						supported = true
-						break
+				// 精确映射需要验证
+				supported := false
+				if p.SupportedModels[internalModel] {
+					supported = true
+				} else {
+					// 检查通配符白名单
+					for supportedPattern := range p.SupportedModels {
+						if matchWildcard(supportedPattern, internalModel) {
+							supported = true
+							break
+						}
 					}
 				}
-			}
 
-			if !supported {
-				errors = append(errors, fmt.Sprintf(
-					"模型映射无效：'%s' -> '%s'，目标模型 '%s' 不在 supportedModels 中",
-					externalModel, internalModel, internalModel,
-				))
+				if !supported {
+					errors = append(errors, fmt.Sprintf(
+						"模型映射无效：'%s' -> '%s'，目标模型 '%s' 不在 supportedModels 中",
+						externalModel, internalModel, internalModel,
+					))
+				}
 			}
 		}
-	}
 
-	// 规则 2：如果配置了 ModelMapping 但未配置 SupportedModels，给出警告
-	if p.ModelMapping != nil && len(p.ModelMapping) > 0 &&
-		(p.SupportedModels == nil || len(p.SupportedModels) == 0) {
-		errors = append(errors,
-			"警告：配置了 modelMapping 但未配置 supportedModels，映射的目标模型无法验证",
-		)
+		// 规则 2：如果配置了 ModelMapping 但未配置 SupportedModels，给出警告
+		if p.ModelMapping != nil && len(p.ModelMapping) > 0 &&
+			(p.SupportedModels == nil || len(p.SupportedModels) == 0) {
+			errors = append(errors,
+				"警告：配置了 modelMapping 但未配置 supportedModels，映射的目标模型无法验证",
+			)
+		}
 	}
 
 	// 规则 3：检测自映射（通常无意义，但不是错误）

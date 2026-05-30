@@ -74,6 +74,33 @@ func TestClaudeEnableProxyTwiceRestoresOriginalSettings(t *testing.T) {
 	assertJSONEqual(t, readFile(t, settingsPath), []byte(initial))
 }
 
+func TestClaudeEnableProxyUsesXBackupNameAndToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	initial := `{"env":{"ANTHROPIC_AUTH_TOKEN":"original-token"}}`
+	writeFile(t, settingsPath, initial)
+
+	service := NewClaudeSettingsService(":18100")
+	if err := service.EnableProxy(); err != nil {
+		t.Fatalf("EnableProxy: %v", err)
+	}
+
+	assertFileExists(t, filepath.Join(home, ".claude", "code-switch-x.back.settings.json"))
+	assertFileNotExists(t, filepath.Join(home, ".claude", ("cc"+"-studio")+".back.settings.json"))
+
+	var payload map[string]any
+	readJSONFile(t, settingsPath, &payload)
+	env, ok := payload["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("env missing or invalid: %#v", payload["env"])
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "code-switch-x" {
+		t.Fatalf("ANTHROPIC_AUTH_TOKEN = %#v, want code-switch-x", got)
+	}
+}
+
 func TestCodexEnableProxyPreservesAuthFields(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -209,7 +236,46 @@ wire_api = "responses"
 	assertJSONEqual(t, readFile(t, authPath), []byte(initialAuth))
 }
 
-func TestCodexEnableProxyDoesNotDuplicateCodeSwitchProvider(t *testing.T) {
+func TestCodexEnableProxyUsesXProviderTokenAndBackupNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	writeFile(t, configPath, `model = "custom-model"`+"\n")
+	writeFile(t, authPath, `{"OPENAI_API_KEY":"real-key"}`)
+
+	service := NewCodexSettingsService(":18100")
+	if err := service.EnableProxy(); err != nil {
+		t.Fatalf("EnableProxy: %v", err)
+	}
+
+	assertFileExists(t, filepath.Join(home, ".codex", "code-switch-x.back.config.toml"))
+	assertFileExists(t, filepath.Join(home, ".codex", "code-switch-x.back.auth.json"))
+	assertFileNotExists(t, filepath.Join(home, ".codex", ("cc"+"-studio")+".back.config.toml"))
+	assertFileNotExists(t, filepath.Join(home, ".codex", ("cc"+"-studio")+".back.auth.json"))
+
+	content := string(readFile(t, configPath))
+	if !strings.Contains(content, "[model_providers.code-switch-x]") {
+		t.Fatalf("config missing code-switch-x provider:\n%s", content)
+	}
+	if strings.Contains(content, "[model_providers."+("code"+"-switch")+"]") {
+		t.Fatalf("config must not contain legacy provider key:\n%s", content)
+	}
+
+	payload := readTOMLMap(t, configPath)
+	if got := payload["model_provider"]; got != "code-switch-x" {
+		t.Fatalf("model_provider = %q, want code-switch-x", got)
+	}
+
+	var auth map[string]any
+	readJSONFile(t, authPath, &auth)
+	if got := auth["OPENAI_API_KEY"]; got != "code-switch-x" {
+		t.Fatalf("OPENAI_API_KEY = %q, want code-switch-x", got)
+	}
+}
+
+func TestCodexEnableProxyDoesNotDuplicateCodeSwitchXProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -225,8 +291,8 @@ func TestCodexEnableProxyDoesNotDuplicateCodeSwitchProvider(t *testing.T) {
 	}
 
 	content := string(readFile(t, configPath))
-	if count := strings.Count(content, "[model_providers.code-switch]"); count != 1 {
-		t.Fatalf("code-switch provider count = %d, want 1\n%s", count, content)
+	if count := strings.Count(content, "[model_providers.code-switch-x]"); count != 1 {
+		t.Fatalf("code-switch-x provider count = %d, want 1\n%s", count, content)
 	}
 }
 
@@ -247,6 +313,20 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
+}
+
+func assertFileExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+}
+
+func assertFileNotExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to not exist, stat error: %v", path, err)
+	}
 }
 
 func readJSONFile(t *testing.T, path string, target any) {

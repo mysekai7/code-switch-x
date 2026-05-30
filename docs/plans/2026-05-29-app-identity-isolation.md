@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Change only application-owned runtime and package identifiers to `-x` names without changing Claude/Codex target configuration compatibility.
+**Goal:** Treat the app as `code-switch-x` for all app-owned runtime, backup, and package identifiers while keeping official Claude/Codex config locations compatible.
 
-**Architecture:** Add shared application identity constants in `services`, replace application-owned hard-coded identifiers with those constants, and update build/package metadata. Keep Claude/Codex settings files, provider keys, auth tokens, backup names, and Wails module bindings unchanged.
+**Architecture:** Use shared application identity constants in `services`, replace app-owned hard-coded identifiers with those constants, and update build/package metadata. Keep official Claude/Codex settings directories and Wails module bindings unchanged.
 
 **Tech Stack:** Go services, Wails build metadata, TOML/YAML/JSON/plist packaging files, Go unit tests.
 
@@ -19,8 +19,8 @@
 **Step 1: Write failing tests**
 
 Add tests in package `services` that assert:
-- `providerFilePath("claude")` returns a path containing `.code-switch-x` and not `.code-switch`.
-- `NewAppSettingsService(nil).path` contains `.codex-switch-x` and not `.codex-switch`.
+- `providerFilePath("claude")` returns a path containing `.code-switch-x`.
+- `NewAppSettingsService(nil).path` contains `.codex-switch-x`.
 - `NewAutoStartService().getDarwinPlistPath()` ends with `Library/LaunchAgents/com.codeswitch-x.app.plist`.
 - macOS LaunchAgent content helper, if introduced, contains `<string>com.codeswitch-x.app</string>`.
 - `getLinuxDesktopPath()` ends with `autostart/codeswitch-x.desktop`.
@@ -29,7 +29,7 @@ Add tests in package `services` that assert:
 
 Run: `go test ./services -run 'TestAppIdentity|TestProviderFilePath|TestAppSettingsPath|TestAutoStart' -count=1`
 
-Expected: FAIL because current implementation still uses `.code-switch`, `.codex-switch`, `com.codeswitch.app`, and `codeswitch.desktop`.
+Expected: FAIL until every app-owned runtime path and autostart identifier uses `code-switch-x`.
 
 ### Task 2: Implement centralized application identity constants
 
@@ -47,10 +47,10 @@ Expected: FAIL because current implementation still uses `.code-switch`, `.codex
 Define constants for:
 - `appDataDirName = ".code-switch-x"`
 - `appSettingsDirName = ".codex-switch-x"`
-- `appName = "CodeSwitchX"`
-- `appDisplayName = "Code Switch X"`
-- `appBundleIdentifier = "com.codeswitch-x.app"`
-- `appLinuxDesktopFileName = "codeswitch-x.desktop"`
+- app executable name `CodeSwitchX`
+- app display name `Code Switch X`
+- app bundle identifier `com.codeswitch-x.app`
+- Linux desktop filename `codeswitch-x.desktop`
 
 **Step 2: Replace hard-coded application-owned identifiers**
 
@@ -69,7 +69,7 @@ Expected: PASS.
 - Modify: `build/config.yml`
 - Modify: `build/darwin/Info.plist`
 - Modify: `build/darwin/Info.dev.plist`
-- Modify: `build/linux/CodeSwitch.desktop`
+- Modify: Linux desktop metadata file
 - Modify: `build/linux/nfpm/nfpm.yaml`
 - Modify: `build/windows/info.json`
 - Modify: `build/windows/nsis/wails_tools.nsh`
@@ -83,17 +83,17 @@ Replace package/display identifiers with `CodeSwitchX`, `Code Switch X`, `com.co
 
 **Step 2: Keep compile-time bindings unchanged**
 
-Do not change `go.mod`, generated `bindings/codeswitch`, or `Call.ByName('codeswitch/...')` strings.
+Do not change `go.mod`, generated frontend bindings, or Wails `Call.ByName` service names.
 
-### Task 4: Verify no Claude/Codex config identifiers changed
+### Task 4: Verify Claude/Codex config markers use app identity
 
 **Files:**
 - Read: `services/claudesettings.go`
 - Read: `services/codexsettings.go`
 
-**Step 1: Check constants remain unchanged**
+**Step 1: Check constants use `code-switch-x`**
 
-Verify these still use existing compatibility values:
+Verify these use `code-switch-x`:
 - Claude backup filename and auth token value.
 - Codex backup filenames, provider key, and auth token value.
 
@@ -101,7 +101,7 @@ Verify these still use existing compatibility values:
 
 Run: `rg -n 'code-switch-x|codeswitch-x|CodeSwitchX|Code Switch X|com\.codeswitch-x' services/claudesettings.go services/codexsettings.go`
 
-Expected: no output.
+Expected: only Claude/Codex proxy marker and backup constants.
 
 ### Task 5: Full verification and review
 

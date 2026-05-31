@@ -14,18 +14,21 @@ const (
 	defaultRelayPort      = 18101
 	DefaultRelayPort      = defaultRelayPort
 	defaultRawLogMaxBytes = 262144
+	maxFallbackAttempts   = 50
 	minRelayPort          = 1024
 	maxRelayPort          = 65535
 )
 
 type AppSettings struct {
-	ShowHeatmap             bool `json:"show_heatmap"`
-	ShowHomeTitle           bool `json:"show_home_title"`
-	AutoStart               bool `json:"auto_start"`
-	RelayPort               int  `json:"relay_port"`
-	CaptureRawLogs          bool `json:"capture_raw_logs"`
-	RawLogMaxBytes          int  `json:"raw_log_max_bytes"`
-	ClaudeThinkingRectifier bool `json:"claude_thinking_rectifier"`
+	ShowHeatmap                 bool `json:"show_heatmap"`
+	ShowHomeTitle               bool `json:"show_home_title"`
+	AutoStart                   bool `json:"auto_start"`
+	RelayPort                   int  `json:"relay_port"`
+	CaptureRawLogs              bool `json:"capture_raw_logs"`
+	RawLogMaxBytes              int  `json:"raw_log_max_bytes"`
+	ClaudeThinkingRectifier     bool `json:"claude_thinking_rectifier"`
+	ProviderFallbackEnabled     bool `json:"provider_fallback_enabled"`
+	ProviderFallbackMaxAttempts int  `json:"provider_fallback_max_attempts"`
 }
 
 type AppSettingsService struct {
@@ -56,13 +59,15 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 	}
 
 	return AppSettings{
-		ShowHeatmap:             true,
-		ShowHomeTitle:           true,
-		AutoStart:               autoStartEnabled,
-		RelayPort:               defaultRelayPort,
-		CaptureRawLogs:          false,
-		RawLogMaxBytes:          defaultRawLogMaxBytes,
-		ClaudeThinkingRectifier: true,
+		ShowHeatmap:                 true,
+		ShowHomeTitle:               true,
+		AutoStart:                   autoStartEnabled,
+		RelayPort:                   defaultRelayPort,
+		CaptureRawLogs:              false,
+		RawLogMaxBytes:              defaultRawLogMaxBytes,
+		ClaudeThinkingRectifier:     true,
+		ProviderFallbackEnabled:     true,
+		ProviderFallbackMaxAttempts: 0,
 	}
 }
 
@@ -79,6 +84,7 @@ func (as *AppSettingsService) SaveAppSettings(settings AppSettings) (AppSettings
 	defer as.mu.Unlock()
 
 	settings.RawLogMaxBytes = normalizeRawLogMaxBytes(settings.RawLogMaxBytes)
+	settings.ProviderFallbackMaxAttempts = normalizeProviderFallbackMaxAttempts(settings.ProviderFallbackMaxAttempts)
 	if err := validateRelayPort(settings.RelayPort); err != nil {
 		return settings, err
 	}
@@ -136,7 +142,23 @@ func normalizeAppSettings(settings AppSettings) AppSettings {
 	if settings.RawLogMaxBytes <= 0 {
 		settings.RawLogMaxBytes = defaultRawLogMaxBytes
 	}
+	if settings.ProviderFallbackMaxAttempts < 0 {
+		settings.ProviderFallbackMaxAttempts = 0
+	}
+	if settings.ProviderFallbackMaxAttempts > maxFallbackAttempts {
+		settings.ProviderFallbackMaxAttempts = maxFallbackAttempts
+	}
 	return settings
+}
+
+func normalizeProviderFallbackMaxAttempts(attempts int) int {
+	if attempts < 0 {
+		return 0
+	}
+	if attempts > maxFallbackAttempts {
+		return maxFallbackAttempts
+	}
+	return attempts
 }
 
 func (as *AppSettingsService) saveLocked(settings AppSettings) error {

@@ -51,6 +51,22 @@ func TestAppSettingsDefaultsClaudeThinkingRectifierOn(t *testing.T) {
 	}
 }
 
+func TestAppSettingsDefaultsProviderFallbackOn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	service := NewAppSettingsService(nil)
+	settings, err := service.GetAppSettings()
+	if err != nil {
+		t.Fatalf("GetAppSettings() error = %v", err)
+	}
+	if !settings.ProviderFallbackEnabled {
+		t.Fatalf("ProviderFallbackEnabled = false, want true")
+	}
+	if settings.ProviderFallbackMaxAttempts != 0 {
+		t.Fatalf("ProviderFallbackMaxAttempts = %d, want 0", settings.ProviderFallbackMaxAttempts)
+	}
+}
+
 func TestAppSettingsNormalizesMissingClaudeThinkingRectifierOn(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -76,6 +92,35 @@ func TestAppSettingsNormalizesMissingClaudeThinkingRectifierOn(t *testing.T) {
 	}
 	if !settings.ClaudeThinkingRectifier {
 		t.Fatalf("ClaudeThinkingRectifier = false for legacy settings, want true")
+	}
+}
+
+func TestAppSettingsNormalizesMissingProviderFallbackOn(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, appSettingsDirName)
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(settingsDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, appSettingsFile), []byte(`{
+  "show_heatmap": true,
+  "show_home_title": true,
+  "auto_start": false,
+  "relay_port": 18101,
+  "capture_raw_logs": false,
+  "raw_log_max_bytes": 262144,
+  "claude_thinking_rectifier": true
+}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(app settings) error = %v", err)
+	}
+
+	service := NewAppSettingsService(nil)
+	settings, err := service.GetAppSettings()
+	if err != nil {
+		t.Fatalf("GetAppSettings() error = %v", err)
+	}
+	if !settings.ProviderFallbackEnabled {
+		t.Fatalf("ProviderFallbackEnabled = false for legacy settings, want true")
 	}
 }
 

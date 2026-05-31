@@ -884,6 +884,7 @@ func streamDeepSeekChatSSEToResponses(reader io.Reader, writer io.Writer) ([]byt
 	buffered := bufio.NewReader(reader)
 	var block strings.Builder
 	var converted bytes.Buffer
+	lineTimeout := upstreamStreamFirstByteTimeout
 
 	writeEvents := func(events [][]byte) error {
 		for _, event := range events {
@@ -910,8 +911,10 @@ func streamDeepSeekChatSSEToResponses(reader io.Reader, writer io.Writer) ([]byt
 	}
 
 	for {
-		line, err := buffered.ReadString('\n')
+		lineBytes, err := readBytesWithTimeout(buffered, '\n', lineTimeout)
+		line := string(lineBytes)
 		if len(line) > 0 {
+			lineTimeout = upstreamStreamIdleTimeout
 			if strings.TrimRight(line, "\r\n") == "" {
 				if err := handleBlock(block.String()); err != nil {
 					return converted.Bytes(), err
@@ -924,6 +927,9 @@ func streamDeepSeekChatSSEToResponses(reader io.Reader, writer io.Writer) ([]byt
 
 		if err != nil {
 			if err != io.EOF {
+				if converted.Len() == 0 {
+					return converted.Bytes(), err
+				}
 				failed := state.failedEvents(fmt.Sprintf("Stream error: %v", err), "stream_error")
 				_ = writeEvents(failed)
 				return converted.Bytes(), err
@@ -934,6 +940,9 @@ func streamDeepSeekChatSSEToResponses(reader io.Reader, writer io.Writer) ([]byt
 				}
 			}
 			if !state.completed {
+				if converted.Len() == 0 {
+					return converted.Bytes(), fmt.Errorf("upstream stream ended before first event")
+				}
 				if err := writeEvents(state.finalizeEvents()); err != nil {
 					return converted.Bytes(), err
 				}
@@ -2400,7 +2409,7 @@ func (prs *ProviderRelayService) forwardDeepSeekCodexRequest(
 	requestLog.HttpCode = status
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readAllWithTimeout(resp.Body, upstreamNonStreamBodyTimeout)
 		normalizedBody := chatErrorToResponsesError(body)
 		resp.Header.Set("Content-Type", "application/json")
 		stripRebuiltBodyHeaders(resp.Header)
@@ -2423,6 +2432,9 @@ func (prs *ProviderRelayService) forwardDeepSeekCodexRequest(
 			requestLog.RawLog.captureResponseBody(translatedResponse)
 		}
 		if err != nil {
+			if c.Writer.Written() {
+				return true, err
+			}
 			return false, err
 		}
 		if prs.codexChatHistory != nil {
@@ -2432,7 +2444,7 @@ func (prs *ProviderRelayService) forwardDeepSeekCodexRequest(
 		return true, nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllWithTimeout(resp.Body, upstreamNonStreamBodyTimeout)
 	if err != nil {
 		return false, err
 	}

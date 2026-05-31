@@ -259,7 +259,9 @@
         "autoStart": "Launch at login",
         "relayPort": "Local relay port",
         "rawLogs": "Save raw request/response",
-        "claudeThinkingRectifier": "Claude thinking compatibility fix"
+        "claudeThinkingRectifier": "Claude thinking compatibility fix",
+        "providerFallback": "Provider failover",
+        "providerFallbackMaxAttempts": "Max provider attempts"
       },
       "subLabel": {
         "sb_assistant_access": "Accessibility permission is required to operate clipboard contents",
@@ -282,6 +284,13 @@
       },
       "claudeThinkingRectifier": {
         "subLabel": "On by default. When the Claude proxy hits thinking signature or budget compatibility errors, it fixes the request and retries the same provider once."
+      },
+      "providerFallback": {
+        "subLabel": "On by default. Retryable upstream errors continue with the next provider in order. Current limit: {attempts}.",
+        "allAttempts": "all available providers",
+        "maxAttemptsSubLabel": "Use 0 to try all available providers. When failover is off, only the first provider is tried.",
+        "invalidAttempts": "Max attempts must be between 0 and 50",
+        "save": "Save limit"
       },
       "import": {
         "label": "Import cc-switch data",

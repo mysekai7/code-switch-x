@@ -8,6 +8,8 @@ export type AppSettings = {
   capture_raw_logs: boolean
   raw_log_max_bytes: number
   claude_thinking_rectifier: boolean
+  provider_fallback_enabled: boolean
+  provider_fallback_max_attempts: number
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -18,6 +20,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   capture_raw_logs: false,
   raw_log_max_bytes: 262144,
   claude_thinking_rectifier: true,
+  provider_fallback_enabled: true,
+  provider_fallback_max_attempts: 0,
 }
 
 export const fetchAppSettings = async (): Promise<AppSettings> => {

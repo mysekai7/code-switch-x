@@ -147,6 +147,38 @@ func (prs *ProviderRelayService) Addr() string {
 	return prs.addr
 }
 
+func (prs *ProviderRelayService) currentAppSettings() AppSettings {
+	if prs.appSettingsService != nil {
+		settings, err := prs.appSettingsService.GetAppSettings()
+		if err == nil {
+			return normalizeAppSettings(settings)
+		}
+	}
+	return AppSettings{
+		ShowHeatmap:                 true,
+		ShowHomeTitle:               true,
+		RelayPort:                   defaultRelayPort,
+		RawLogMaxBytes:              defaultRawLogMaxBytes,
+		ClaudeThinkingRectifier:     true,
+		ProviderFallbackEnabled:     true,
+		ProviderFallbackMaxAttempts: 0,
+	}
+}
+
+func providerAttemptLimit(providerCount int, settings AppSettings) int {
+	if providerCount <= 0 {
+		return 0
+	}
+	if !settings.ProviderFallbackEnabled {
+		return 1
+	}
+	attempts := normalizeProviderFallbackMaxAttempts(settings.ProviderFallbackMaxAttempts)
+	if attempts <= 0 || attempts > providerCount {
+		return providerCount
+	}
+	return attempts
+}
+
 func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
 	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
 	router.POST("/claude/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
@@ -170,7 +202,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		if c.Request.Body != nil {
 			data, err := io.ReadAll(c.Request.Body)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+				writeLocalProtocolError(c, kind, http.StatusBadRequest, "invalid request body")
 				return
 			}
 			bodyBytes = data
@@ -187,7 +219,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		providers, err := prs.providerService.LoadProviders(kind)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load providers"})
+			writeLocalProtocolError(c, kind, http.StatusInternalServerError, "failed to load providers")
 			return
 		}
 
@@ -218,14 +250,15 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		if len(active) == 0 {
 			if requestedModel != "" {
-				c.JSON(http.StatusNotFound, gin.H{
-					"error": fmt.Sprintf("没有可用的 provider 支持模型 '%s'（已跳过 %d 个不兼容的 provider）", requestedModel, skippedCount),
-				})
+				writeLocalProtocolError(c, kind, http.StatusNotFound, fmt.Sprintf("没有可用的 provider 支持模型 '%s'（已跳过 %d 个不兼容的 provider）", requestedModel, skippedCount))
 			} else {
-				c.JSON(http.StatusNotFound, gin.H{"error": "no providers available"})
+				writeLocalProtocolError(c, kind, http.StatusNotFound, "no providers available")
 			}
 			return
 		}
+
+		settings := prs.currentAppSettings()
+		maxAttempts := providerAttemptLimit(len(active), settings)
 
 		fmt.Printf("[INFO] 找到 %d 个可用的 provider（已过滤 %d 个）：", len(active), skippedCount)
 		for _, p := range active {
@@ -240,6 +273,9 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		var lastUpstreamErr *upstreamResponseError
 		attemptCount := 0
 		for i, provider := range active {
+			if attemptCount >= maxAttempts {
+				break
+			}
 			attemptCount++
 
 			effectiveModel := provider.GetEffectiveModel(requestedModel)
@@ -265,7 +301,12 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			duration := time.Since(startTime)
 
 			if ok {
-				fmt.Printf("[INFO]   ✓ 成功: %s | 耗时: %.2fs\n", provider.Name, duration.Seconds())
+				if err != nil {
+					fmt.Printf("[WARN]   响应已写出，停止故障转移: %s | 错误: %s | 耗时: %.2fs\n",
+						provider.Name, err.Error(), duration.Seconds())
+				} else {
+					fmt.Printf("[INFO]   ✓ 成功: %s | 耗时: %.2fs\n", provider.Name, duration.Seconds())
+				}
 				return
 			}
 
@@ -296,7 +337,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			message = fmt.Sprintf("%s: %s", message, lastErr.Error())
 		}
 		xlog.Error("all is error")
-		c.JSON(http.StatusBadRequest, gin.H{"error": message})
+		writeLocalProtocolError(c, kind, http.StatusBadRequest, message)
 	}
 }
 
@@ -375,10 +416,10 @@ func (prs *ProviderRelayService) forwardRequest(
 		}
 		hooks = append(hooks, ReqeustLogHook(c, kind, requestLog))
 		_, copyErr := writeUpstreamResponse(c.Writer, resp, hooks...)
-		return copyErr == nil, copyErr
+		return copyErr == nil || c.Writer.Written(), copyErr
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readAllWithTimeout(resp.Body, upstreamNonStreamBodyTimeout)
 	_ = resp.Body.Close()
 	if retryResp, retried, err := prs.retryClaudeThinkingRectifiedRequest(kind, targetURL, query, headers, bodyBytes, body, requestLog); err != nil {
 		return false, err
@@ -396,9 +437,9 @@ func (prs *ProviderRelayService) forwardRequest(
 			}
 			hooks = append(hooks, ReqeustLogHook(c, kind, requestLog))
 			_, copyErr := writeUpstreamResponse(c.Writer, retryResp, hooks...)
-			return copyErr == nil, copyErr
+			return copyErr == nil || c.Writer.Written(), copyErr
 		}
-		retryBody, _ := io.ReadAll(retryResp.Body)
+		retryBody, _ := readAllWithTimeout(retryResp.Body, upstreamNonStreamBodyTimeout)
 		if kind == "claude" {
 			headers, normalizedBody := normalizeClaudeUpstreamErrorResponse(retryResp.StatusCode, retryResp.Header, retryBody)
 			if requestLog.RawLog != nil {
@@ -610,17 +651,27 @@ func (e *upstreamResponseError) Error() string {
 }
 
 func writeUpstreamError(c *gin.Context, upstreamErr *upstreamResponseError) {
-	for key, values := range upstreamErr.headers {
-		target := c.Writer.Header()
-		target.Del(key)
-		for _, value := range values {
-			target.Add(key, value)
-		}
-	}
+	copyHTTPHeader(c.Writer.Header(), upstreamErr.headers)
 	c.Writer.WriteHeader(upstreamErr.statusCode)
 	if len(upstreamErr.body) > 0 {
 		_, _ = c.Writer.Write(upstreamErr.body)
 	}
+}
+
+func writeLocalProtocolError(c *gin.Context, kind string, status int, message string) {
+	if kind == "claude" {
+		body := mustMarshalAnthropicError(anthropicErrorTypeForHTTPStatus(status), message)
+		c.Data(status, "application/json", body)
+		return
+	}
+	c.JSON(status, gin.H{
+		"error": gin.H{
+			"message": message,
+			"type":    openAIErrorTypeForHTTPStatus(status),
+			"code":    nil,
+			"param":   nil,
+		},
+	})
 }
 
 func isClaudeNonRetryableUpstreamStatus(status int) bool {
@@ -630,7 +681,6 @@ func isClaudeNonRetryableUpstreamStatus(status int) bool {
 		http.StatusNotAcceptable,
 		http.StatusRequestEntityTooLarge,
 		http.StatusRequestURITooLong,
-		http.StatusTooManyRequests,
 		http.StatusUnsupportedMediaType,
 		http.StatusUnprocessableEntity,
 		http.StatusNotImplemented:
@@ -700,6 +750,19 @@ func anthropicErrorTypeForHTTPStatus(status int) string {
 		}
 		return "invalid_request_error"
 	}
+}
+
+func openAIErrorTypeForHTTPStatus(status int) string {
+	if status == http.StatusTooManyRequests {
+		return "rate_limit_error"
+	}
+	if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+			return "invalid_request_error"
+		}
+		return "proxy_error"
+	}
+	return "proxy_error"
 }
 
 func mustMarshalAnthropicError(errorType string, message string) []byte {
@@ -833,11 +896,16 @@ func ReqeustLogHook(c *gin.Context, kind string, usage *ReqeustLog) func(data []
 
 func parseEventPayload(payload string, parser func(string, *ReqeustLog), usage *ReqeustLog) {
 	lines := strings.Split(payload, "\n")
+	foundSSEData := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "data:") {
+			foundSSEData = true
 			parser(strings.TrimPrefix(line, "data: "), usage)
 		}
+	}
+	if !foundSSEData && json.Valid([]byte(payload)) {
+		parser(payload, usage)
 	}
 }
 

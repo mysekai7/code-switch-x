@@ -1728,6 +1728,167 @@ func TestProviderRelayStreamsDeepSeekChatSSEDeltaBeforeUpstreamEOF(t *testing.T)
 	releaseOnce.Do(func() { close(releaseUpstream) })
 }
 
+func TestProviderRelayFallsBackWhenDeepSeekStreamFirstByteTimesOut(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalFirstByteTimeout := upstreamStreamFirstByteTimeout
+	upstreamStreamFirstByteTimeout = 30 * time.Millisecond
+	t.Cleanup(func() {
+		upstreamStreamFirstByteTimeout = originalFirstByteTimeout
+	})
+
+	releaseUpstream := make(chan struct{})
+	var releaseOnce sync.Once
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-releaseUpstream
+	}))
+	defer first.Close()
+	defer releaseOnce.Do(func() { close(releaseUpstream) })
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-fallback",
+			"created":1700000000,
+			"model":"deepseek-chat",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+		}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{
+		{
+			ID:           1,
+			Name:         "Slow DeepSeek",
+			APIURL:       first.URL,
+			APIKey:       "test-key",
+			Enabled:      true,
+			ProviderType: "deepseek",
+		},
+		{
+			ID:           2,
+			Name:         "Fallback DeepSeek",
+			APIURL:       second.URL,
+			APIKey:       "test-key",
+			Enabled:      true,
+			ProviderType: "deepseek",
+		},
+	})
+	relay := httptest.NewServer(router)
+	defer relay.Close()
+
+	type result struct {
+		code int
+		body string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodPost, relay.URL+"/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := relay.Client().Do(req)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		done <- result{code: resp.StatusCode, body: string(body), err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("relay request error: %v", got.err)
+		}
+		if got.code != http.StatusOK {
+			t.Fatalf("status = %d, want %d, body=%s", got.code, http.StatusOK, got.body)
+		}
+		if firstCalls != 1 || secondCalls != 1 {
+			t.Fatalf("upstream calls = (%d,%d), want (1,1)", firstCalls, secondCalls)
+		}
+		if !strings.Contains(got.body, "fallback ok") {
+			t.Fatalf("fallback response missing translated content: %s", got.body)
+		}
+	case <-time.After(500 * time.Millisecond):
+		releaseOnce.Do(func() { close(releaseUpstream) })
+		t.Fatalf("relay did not fall back after DeepSeek stream first byte timeout")
+	}
+}
+
+func TestProviderRelayFallsBackWhenDeepSeekStreamEndsBeforeFirstEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-empty-fallback",
+			"created":1700000000,
+			"model":"deepseek-chat",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"fallback after empty stream"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+		}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{
+		{
+			ID:           1,
+			Name:         "Empty DeepSeek",
+			APIURL:       first.URL,
+			APIKey:       "test-key",
+			Enabled:      true,
+			ProviderType: "deepseek",
+		},
+		{
+			ID:           2,
+			Name:         "Fallback DeepSeek",
+			APIURL:       second.URL,
+			APIKey:       "test-key",
+			Enabled:      true,
+			ProviderType: "deepseek",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("upstream calls = (%d,%d), want (1,1)", firstCalls, secondCalls)
+	}
+	if !strings.Contains(rec.Body.String(), "fallback after empty stream") {
+		t.Fatalf("fallback response missing translated content: %s", rec.Body.String())
+	}
+}
+
 func TestCodexChatHistoryRecordsFunctionCallsFromCompletedSSEEvent(t *testing.T) {
 	payload := []byte(`{
 		"id": "resp_stream_tool",

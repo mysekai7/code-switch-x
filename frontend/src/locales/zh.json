@@ -259,6 +259,8 @@
         "relayPort": "本地代理端口",
         "rawLogs": "保存原始请求/响应",
         "claudeThinkingRectifier": "Claude Thinking 兼容修复",
+        "providerFallback": "供应商故障转移",
+        "providerFallbackMaxAttempts": "最大尝试供应商数",
         "automatic_up": "自动检查更新",
         "next_up": "下次启动自动检查更新"
       },
@@ -283,6 +285,13 @@
       },
       "claudeThinkingRectifier": {
         "subLabel": "默认开启。Claude 代理遇到 thinking 签名或 budget 兼容错误时，会修正请求并对同一服务商重试一次。"
+      },
+      "providerFallback": {
+        "subLabel": "默认开启。当前上游返回可重试错误时，会按供应商顺序继续尝试；当前上限：{attempts}。",
+        "allAttempts": "全部可用供应商",
+        "maxAttemptsSubLabel": "填 0 表示尝试全部可用供应商；关闭故障转移时只尝试第一个供应商。",
+        "invalidAttempts": "最大尝试数需在 0-50 之间",
+        "save": "保存上限"
       },
       "import": {
         "label": "导入 cc-switch 配置",

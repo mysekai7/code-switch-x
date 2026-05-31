@@ -31,6 +31,10 @@ const relayPortError = ref('')
 const rawLogCaptureEnabled = ref(false)
 const rawLogMaxBytes = ref(262144)
 const claudeThinkingRectifierEnabled = ref(true)
+const providerFallbackEnabled = ref(true)
+const providerFallbackMaxAttempts = ref(0)
+const providerFallbackMaxAttemptsInput = ref('0')
+const providerFallbackMaxAttemptsError = ref('')
 const settingsLoading = ref(true)
 const saveBusy = ref(false)
 const importStatus = ref<ConfigImportStatus | null>(null)
@@ -53,7 +57,11 @@ const loadAppSettings = async () => {
     rawLogCaptureEnabled.value = data?.capture_raw_logs ?? false
     rawLogMaxBytes.value = data?.raw_log_max_bytes ?? 262144
     claudeThinkingRectifierEnabled.value = data?.claude_thinking_rectifier ?? true
+    providerFallbackEnabled.value = data?.provider_fallback_enabled ?? true
+    providerFallbackMaxAttempts.value = data?.provider_fallback_max_attempts ?? 0
+    providerFallbackMaxAttemptsInput.value = String(providerFallbackMaxAttempts.value)
     relayPortError.value = ''
+    providerFallbackMaxAttemptsError.value = ''
   } catch (error) {
     console.error('failed to load app settings', error)
     heatmapEnabled.value = true
@@ -64,7 +72,11 @@ const loadAppSettings = async () => {
     rawLogCaptureEnabled.value = false
     rawLogMaxBytes.value = 262144
     claudeThinkingRectifierEnabled.value = true
+    providerFallbackEnabled.value = true
+    providerFallbackMaxAttempts.value = 0
+    providerFallbackMaxAttemptsInput.value = '0'
     relayPortError.value = ''
+    providerFallbackMaxAttemptsError.value = ''
   } finally {
     settingsLoading.value = false
   }
@@ -82,6 +94,8 @@ const persistAppSettings = async (): Promise<boolean> => {
       capture_raw_logs: rawLogCaptureEnabled.value,
       raw_log_max_bytes: rawLogMaxBytes.value,
       claude_thinking_rectifier: claudeThinkingRectifierEnabled.value,
+      provider_fallback_enabled: providerFallbackEnabled.value,
+      provider_fallback_max_attempts: providerFallbackMaxAttempts.value,
     }
     await saveAppSettings(payload)
     window.dispatchEvent(new CustomEvent('app-settings-updated'))
@@ -99,6 +113,16 @@ const persistAppSettings = async (): Promise<boolean> => {
 const relayPortChanged = computed(() => relayPortInput.value.trim() !== String(relayPort.value))
 const relayPortSubLabel = computed(() =>
   t('components.general.relay.subLabel', { port: relayPort.value }),
+)
+const providerFallbackMaxAttemptsChanged = computed(
+  () => providerFallbackMaxAttemptsInput.value.trim() !== String(providerFallbackMaxAttempts.value),
+)
+const providerFallbackSubLabel = computed(() =>
+  t('components.general.providerFallback.subLabel', {
+    attempts: providerFallbackMaxAttempts.value === 0
+      ? t('components.general.providerFallback.allAttempts')
+      : providerFallbackMaxAttempts.value,
+  }),
 )
 
 const parseRelayPortInput = () => {
@@ -127,6 +151,33 @@ const persistRelayPort = async () => {
     return
   }
   relayPort.value = previousPort
+}
+
+const parseProviderFallbackMaxAttemptsInput = () => {
+  const value = providerFallbackMaxAttemptsInput.value.trim()
+  if (!/^\d+$/.test(value)) return null
+  const attempts = Number(value)
+  if (!Number.isInteger(attempts) || attempts < 0 || attempts > 50) return null
+  return attempts
+}
+
+const persistProviderFallbackMaxAttempts = async () => {
+  providerFallbackMaxAttemptsError.value = ''
+  const attempts = parseProviderFallbackMaxAttemptsInput()
+  if (attempts === null) {
+    providerFallbackMaxAttemptsError.value = t('components.general.providerFallback.invalidAttempts')
+    return
+  }
+  if (attempts === providerFallbackMaxAttempts.value) return
+
+  const previousAttempts = providerFallbackMaxAttempts.value
+  providerFallbackMaxAttempts.value = attempts
+  const ok = await persistAppSettings()
+  if (ok) {
+    providerFallbackMaxAttemptsInput.value = String(attempts)
+    return
+  }
+  providerFallbackMaxAttempts.value = previousAttempts
 }
 
 onMounted(() => {
@@ -415,6 +466,48 @@ const handleSecondaryImportAction = async () => {
               />
               <span></span>
             </label>
+          </ListItem>
+          <ListItem
+            :label="$t('components.general.label.providerFallback')"
+            :sub-label="providerFallbackSubLabel"
+          >
+            <label class="mac-switch">
+              <input
+                type="checkbox"
+                :disabled="settingsLoading || saveBusy"
+                v-model="providerFallbackEnabled"
+                @change="persistAppSettings"
+              />
+              <span></span>
+            </label>
+          </ListItem>
+          <ListItem
+            :label="$t('components.general.label.providerFallbackMaxAttempts')"
+            :sub-label="$t('components.general.providerFallback.maxAttemptsSubLabel')"
+          >
+            <div class="relay-port-control">
+              <BaseInput
+                v-model="providerFallbackMaxAttemptsInput"
+                class="relay-port-input"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                :disabled="settingsLoading || saveBusy"
+                @keydown.enter.prevent="persistProviderFallbackMaxAttempts"
+              />
+              <BaseButton
+                size="sm"
+                variant="outline"
+                type="button"
+                :disabled="settingsLoading || saveBusy || !providerFallbackMaxAttemptsChanged"
+                @click="persistProviderFallbackMaxAttempts"
+              >
+                {{ $t('components.general.providerFallback.save') }}
+              </BaseButton>
+              <span v-if="providerFallbackMaxAttemptsError" class="relay-port-error">
+                {{ providerFallbackMaxAttemptsError }}
+              </span>
+            </div>
           </ListItem>
           <ListItem
             v-if="showImportRow"

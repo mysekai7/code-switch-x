@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/daodao97/xgo/xdb"
 	"github.com/daodao97/xgo/xrequest"
@@ -813,7 +815,7 @@ func TestProxyHandlerDoesNotFallbackClaudeNonRetryableUpstreamError(t *testing.T
 	}
 }
 
-func TestProxyHandlerDoesNotFallbackClaudeRateLimitError(t *testing.T) {
+func TestProxyHandlerFallsBackClaudeRateLimitError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var firstCalls int
@@ -856,14 +858,51 @@ func TestProxyHandlerDoesNotFallbackClaudeRateLimitError(t *testing.T) {
 
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	if firstCalls != 1 {
 		t.Fatalf("first upstream calls = %d, want 1", firstCalls)
 	}
-	if secondCalls != 0 {
-		t.Fatalf("second upstream calls = %d, want 0", secondCalls)
+	if secondCalls != 1 {
+		t.Fatalf("second upstream calls = %d, want 1", secondCalls)
+	}
+	if got := gjson.Get(rec.Body.String(), "id").String(); got != "msg_test" {
+		t.Fatalf("id = %q, want msg_test; body=%s", got, rec.Body.String())
+	}
+}
+
+func TestProxyHandlerReturnsClaudeRateLimitErrorWithSingleProvider(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var calls int
+	upstream := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limited by upstream"}}`))
+	}))
+	defer upstream.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{{
+		ID:      1,
+		Name:    "Rate Limited Relay",
+		APIURL:  upstream.URL,
+		APIKey:  "test-key",
+		Enabled: true,
+	}})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
 	}
 	if got := gjson.Get(rec.Body.String(), "type").String(); got != "error" {
 		t.Fatalf("type = %q, want error; body=%s", got, rec.Body.String())
@@ -873,6 +912,165 @@ func TestProxyHandlerDoesNotFallbackClaudeRateLimitError(t *testing.T) {
 	}
 	if got := gjson.Get(rec.Body.String(), "error.message").String(); got != "rate limited by upstream" {
 		t.Fatalf("error.message = %q, want rate limited by upstream; body=%s", got, rec.Body.String())
+	}
+}
+
+func TestProxyHandlerDoesNotFallbackWhenProviderFallbackDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limited by upstream"}}`))
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{
+		{
+			ID:      1,
+			Name:    "Rate Limited Relay",
+			APIURL:  first.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+		{
+			ID:      2,
+			Name:    "Fallback Relay",
+			APIURL:  second.URL,
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	}, AppSettings{
+		RelayPort:                   defaultRelayPort,
+		ProviderFallbackEnabled:     false,
+		ProviderFallbackMaxAttempts: 0,
+		ClaudeThinkingRectifier:     true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if firstCalls != 1 {
+		t.Fatalf("first upstream calls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 0 {
+		t.Fatalf("second upstream calls = %d, want 0", secondCalls)
+	}
+}
+
+func TestProxyHandlerHonorsProviderFallbackMaxAttempts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"first failed"}}`))
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":{"message":"second failed"}}`))
+	}))
+	defer second.Close()
+
+	var thirdCalls int
+	third := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		thirdCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[]}`))
+	}))
+	defer third.Close()
+
+	router := setupRelayTestRouter(t, "claude", []Provider{
+		{ID: 1, Name: "First", APIURL: first.URL, APIKey: "test-key", Enabled: true},
+		{ID: 2, Name: "Second", APIURL: second.URL, APIKey: "test-key", Enabled: true},
+		{ID: 3, Name: "Third", APIURL: third.URL, APIKey: "test-key", Enabled: true},
+	}, AppSettings{
+		RelayPort:                   defaultRelayPort,
+		ProviderFallbackEnabled:     true,
+		ProviderFallbackMaxAttempts: 2,
+		ClaudeThinkingRectifier:     true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if firstCalls != 1 || secondCalls != 1 || thirdCalls != 0 {
+		t.Fatalf("calls = (%d,%d,%d), want (1,1,0)", firstCalls, secondCalls, thirdCalls)
+	}
+}
+
+func TestProxyHandlerFormatsLocalClaudeErrorsAsAnthropicError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupRelayTestRouter(t, "claude", []Provider{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "type").String(); got != "error" {
+		t.Fatalf("type = %q, want error; body=%s", got, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got == "" {
+		t.Fatalf("error.type missing; body=%s", rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.message").String(); got == "" {
+		t.Fatalf("error.message missing; body=%s", rec.Body.String())
+	}
+}
+
+func TestProxyHandlerFormatsLocalCodexErrorsAsOpenAIError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := setupRelayTestRouter(t, "codex", []Provider{})
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.message").String(); got == "" {
+		t.Fatalf("error.message missing; body=%s", rec.Body.String())
+	}
+	if got := gjson.Get(rec.Body.String(), "error.type").String(); got != "proxy_error" {
+		t.Fatalf("error.type = %q, want proxy_error; body=%s", got, rec.Body.String())
+	}
+	if !gjson.Get(rec.Body.String(), "error.param").Exists() {
+		t.Fatalf("error.param missing; body=%s", rec.Body.String())
 	}
 }
 
@@ -1280,6 +1478,101 @@ func TestProxyHandlerStoresRawStreamResponseWithSSESeparators(t *testing.T) {
 	}
 }
 
+func TestProxyHandlerDoesNotFallbackAfterStreamingBytesWritten(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalIdleTimeout := upstreamStreamIdleTimeout
+	upstreamStreamIdleTimeout = 30 * time.Millisecond
+	t.Cleanup(func() {
+		upstreamStreamIdleTimeout = originalIdleTimeout
+	})
+
+	releaseUpstream := make(chan struct{})
+	var releaseOnce sync.Once
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"response\":{\"usage\":{\"input_tokens\":1}}}\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-releaseUpstream
+	}))
+	defer first.Close()
+	defer releaseOnce.Do(func() { close(releaseUpstream) })
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_fallback","object":"response"}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{
+		{ID: 1, Name: "Slow Stream", APIURL: first.URL, APIKey: "test-key", Enabled: true},
+		{ID: 2, Name: "Fallback", APIURL: second.URL, APIKey: "test-key", Enabled: true},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if firstCalls != 1 {
+		t.Fatalf("first upstream calls = %d, want 1", firstCalls)
+	}
+	if secondCalls != 0 {
+		t.Fatalf("second upstream calls = %d, want 0 after stream bytes were written", secondCalls)
+	}
+	if strings.Contains(rec.Body.String(), "resp_fallback") {
+		t.Fatalf("response contains fallback body after partial stream: %s", rec.Body.String())
+	}
+	releaseOnce.Do(func() { close(releaseUpstream) })
+}
+
+func TestProxyHandlerFallsBackWhenStreamEndsBeforeFirstEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var firstCalls int
+	first := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+	}))
+	defer first.Close()
+
+	var secondCalls int
+	second := newTCP4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_fallback","object":"response"}`))
+	}))
+	defer second.Close()
+
+	router := setupRelayTestRouter(t, "codex", []Provider{
+		{ID: 1, Name: "Empty Stream", APIURL: first.URL, APIKey: "test-key", Enabled: true},
+		{ID: 2, Name: "Fallback", APIURL: second.URL, APIKey: "test-key", Enabled: true},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5","input":"hi","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("upstream calls = (%d,%d), want (1,1)", firstCalls, secondCalls)
+	}
+	if got := gjson.Get(rec.Body.String(), "id").String(); got != "resp_fallback" {
+		t.Fatalf("id = %q, want resp_fallback; body=%s", got, rec.Body.String())
+	}
+}
+
 func TestLogServiceGetRequestLogPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1362,6 +1655,25 @@ func TestCodexParseTokenUsageFromRootUsage(t *testing.T) {
 	}
 	if usage.CacheReadTokens != 4 {
 		t.Fatalf("CacheReadTokens = %d, want 4", usage.CacheReadTokens)
+	}
+	if usage.ReasoningTokens != 2 {
+		t.Fatalf("ReasoningTokens = %d, want 2", usage.ReasoningTokens)
+	}
+}
+
+func TestParseEventPayloadParsesNonStreamJSONUsage(t *testing.T) {
+	usage := &ReqeustLog{}
+
+	parseEventPayload(`{"usage":{"input_tokens":8,"output_tokens":5,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}`, CodexParseTokenUsageFromResponse, usage)
+
+	if usage.InputTokens != 8 {
+		t.Fatalf("InputTokens = %d, want 8", usage.InputTokens)
+	}
+	if usage.OutputTokens != 5 {
+		t.Fatalf("OutputTokens = %d, want 5", usage.OutputTokens)
+	}
+	if usage.CacheReadTokens != 3 {
+		t.Fatalf("CacheReadTokens = %d, want 3", usage.CacheReadTokens)
 	}
 	if usage.ReasoningTokens != 2 {
 		t.Fatalf("ReasoningTokens = %d, want 2", usage.ReasoningTokens)
